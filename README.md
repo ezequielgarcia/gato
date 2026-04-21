@@ -134,7 +134,7 @@ This function maps a $\psi$ array to $\hat T\psi$ in $O(N^3)$ time and $O(N^3)$ 
 ### 3.1 Project layout
 
 ```
-neptune/
+gato/
 ├── README.md               (this file)
 ├── pyproject.toml          uv-managed project definition
 ├── uv.lock                 pinned exact dependency versions
@@ -143,11 +143,19 @@ neptune/
 │   └── gato/
 │       ├── __init__.py     public API + enable_x64() + main()
 │       ├── grid.py         Grid3D + integration helpers
-│       └── operators.py    laplacian / kinetic / gradient
-└── tests/
-    ├── conftest.py         forces float64 for all tests
-    ├── test_grid.py        grid/integration sanity checks
-    └── test_laplacian.py   operator correctness tests
+│       ├── operators.py    laplacian / kinetic / gradient (matrix-free)
+│       ├── potentials.py   softened Coulomb, harmonic, constant
+│       ├── hamiltonian.py  H = T + V with .apply / .rayleigh
+│       ├── observables.py  ⟨T⟩, ⟨V⟩, virial ratio, radial density
+│       ├── ansatz/
+│       │   ├── grid.py     grid-parameter ansatz (parameters = grid values)
+│       │   └── neural.py   Equinox MLP × Kato cusp factor
+│       ├── solvers/
+│       │   ├── imag_time.py  ψ ← ψ − Δτ·Hψ  (grid ansatz)
+│       │   └── vqe.py        optax-driven Rayleigh-quotient minimization
+│       └── physics/
+│           └── hydrogen.py   end-to-end Phase 1 driver (CLI `gato-hydrogen`)
+└── tests/                  30 tests covering every module above
 ```
 
 ### 3.2 `Grid3D`
@@ -194,9 +202,38 @@ grad = gradient(psi, grid.h)                         # shape (3, N, N, N)
 
 `boundary` must be a static argument (`"dirichlet"` or `"periodic"`) because the control flow depends on it; JAX traces each branch once and caches the compiled code.
 
-### 3.5 Tests
+### 3.5 Neural ansatz with Kato cusp
 
-13 tests, all passing on a 32³–128³ grid in about 16 s on CPU. The key ones:
+The neural ansatz is
+
+$$
+\psi_\theta(\mathbf r) \;=\; g_\theta(\mathbf r)\;\prod_k \exp\bigl(-Z_k\,|\mathbf r - \mathbf R_k|\bigr),
+$$
+
+where $g_\theta$ is a tanh-MLP (Equinox, configurable depth/width) and the product runs over nuclei at positions $\{\mathbf R_k\}$ with charges $\{Z_k\}$. The exponential factor imposes **Kato's exact nuclear-cusp condition** [Kato 1957],
+
+$$
+\left\langle \frac{1}{\psi}\frac{\partial \psi}{\partial r}\right\rangle_{\!\Omega} \;\xrightarrow[\,r \to \mathbf R_k\,]{} \;-Z_k,
+$$
+
+which every true Coulomb eigenstate satisfies. The smooth MLP contribution averages to zero angularly near the nucleus, so the cusp is **exact by construction** regardless of the network weights.
+
+```python
+from gato.ansatz.neural import NeuralAnsatz
+
+model = NeuralAnsatz(
+    key=key,
+    nuclei_positions=((0.0, 0.0, 0.0),),   # hydrogen at origin
+    nuclei_charges=(1.0,),
+    hidden=32, n_layers=3,
+)
+```
+
+For Phase 2 ($\text{H}_2^+$) the same class takes two nuclei; for Phase 5 (neural VMC on water), the same cusp machinery extends to a product over all nuclei of H₂O, with Jastrow factors to be added for electron-electron cusps.
+
+### 3.6 Tests
+
+30 tests, all passing on a 32³–128³ grid in about 47 s on CPU. The key ones:
 
 | Test | What it checks | Why it matters |
 |---|---|---|
@@ -204,9 +241,11 @@ grad = gradient(psi, grid.h)                         # shape (3, N, N, N)
 | `test_periodic_continuum_limit_second_order` | As $h \to 0$ the FD eigenvalue converges to $-|\mathbf k|^2$ and the error drops by $\sim 4$× when $N$ doubles. | Verifies the $O(h^2)$ accuracy of the discretization. |
 | `test_dirichlet_hermitian` | $\langle\phi\|\nabla^2\psi\rangle = \langle\nabla^2\phi\|\psi\rangle$ for random $\phi,\psi$. | Hermiticity is required for any variational ground-state method to converge to a real minimum. |
 | `test_dirichlet_particle_in_box_converges` | The Rayleigh quotient for $\psi = \prod\cos(\pi x_\alpha/L)$ on $[-L/2, L/2]^3$ converges monotonically to the continuum $3\pi^2/(2L^2)$. | Sanity-checks the full $\langle\psi\|\hat T\|\psi\rangle / \langle\psi\|\psi\rangle$ pipeline against a textbook analytic result. |
-| `test_gaussian_normalization` | A unit-norm Gaussian integrates to 1 on the grid. | Sanity-checks the midpoint integration rule. |
+| `test_harmonic_oscillator_ground_state` | The analytic 3D HO ground state gives $E = \tfrac{3}{2}\omega$ to $< 1\%$. | End-to-end check of `Hamiltonian` composition against an analytic non-Coulomb benchmark. |
+| `test_neural_ansatz_cusp_single_center` | The spherically-averaged log-slope $\langle(1/\psi)\partial_r\psi\rangle_\Omega$ at the nucleus equals $-Z$. | Verifies Kato's cusp is satisfied by construction, for any random MLP weights. |
+| `test_hydrogen_imag_time_converges` | Imaginary-time propagation from the hydrogenic initial guess gives $E$ within 10 % of $-0.5\,E_h$ on a small grid. | End-to-end sanity of the full Phase 1 stack (grid → kinetic → potential → Hamiltonian → solver → observables). |
 
-### 3.6 Quick smoke test
+### 3.7 Quick smoke test
 
 ```bash
 uv run gato
@@ -226,10 +265,11 @@ Prints JAX version, the available device, a grid summary, and the kinetic energy
 ### 4.2 Setup
 
 ```bash
-cd neptune
+cd gato
 uv sync              # creates .venv/ and installs all CPU deps from uv.lock
-uv run pytest        # 13 tests should pass
-uv run gato     # smoke test
+uv run pytest        # 30 tests should pass
+uv run gato          # smoke test
+uv run gato-hydrogen # full hydrogen benchmark
 ```
 
 On a GPU box, add the CUDA extras:
@@ -266,11 +306,11 @@ Foundation: prove the machinery works by recovering the hydrogen ground state $E
 - [x] `hamiltonian.py` — full $\hat H = \hat T + \hat V$ with `.apply`, `.expectation`, `.rayleigh`
 - [x] `observables.py` — $\langle T\rangle$, $\langle V\rangle$, virial ratio, radial density
 - [x] `ansatz/grid.py` — raw grid parameters as variational wave function
-- [x] `ansatz/neural.py` — Equinox MLP $\psi_\theta(x, y, z)$ with $e^{-\alpha r}$ envelope
+- [x] `ansatz/neural.py` — Equinox MLP $\psi_\theta(\mathbf r) = g_\theta(\mathbf r)\prod_k e^{-Z_k|\mathbf r-\mathbf R_k|}$ with exact Kato nuclear cusps
 - [x] `solvers/imag_time.py` — imaginary-time propagation $\psi \to \psi - \Delta\tau\,\hat H\psi$
 - [x] `solvers/vqe.py` — optax-driven Rayleigh-quotient minimization
 - [x] `physics/hydrogen.py` — end-to-end driver targeting $-0.5\,E_h$
-- [x] Test suite (26 tests): plane-wave exactness, $O(h^2)$ convergence, Hermiticity, HO ground state, end-to-end hydrogen
+- [x] Test suite (30 tests): plane-wave exactness, $O(h^2)$ convergence, Hermiticity, HO ground state, Kato cusp spherical-average, end-to-end hydrogen
 
 **Exit criterion:** recover $E_0 \approx -0.5\,E_h$ within 1% on a 64³ grid.
 
@@ -362,6 +402,7 @@ What's **not** needed:
 - Griffiths & Schroeter, *Introduction to Quantum Mechanics*, 3rd ed. — chapters on hydrogen and the variational principle.
 - Martin, *Electronic Structure: Basic Theory and Practical Methods*, Cambridge — the canonical DFT/HF reference used for Phases 3 and 4.
 - Szabo & Ostlund, *Modern Quantum Chemistry*, Dover — Hartree–Fock, configuration interaction, and the SCF loop.
+- Kato, T. (1957), "On the eigenfunctions of many-particle systems in quantum mechanics", *Communications on Pure and Applied Mathematics* **10**, 151–177 — the nuclear- and electron-coalescence cusp conditions encoded into the neural ansatz.
 - Peruzzo et al. (2014), "A variational eigenvalue solver on a photonic quantum processor" — the original VQE paper.
 - Pfau et al. (2020), "Ab initio solution of the many-electron Schrödinger equation with deep neural networks" — FermiNet, the blueprint for Phase 5.
 - Hermann et al. (2020), "Deep-neural-network solution of the electronic Schrödinger equation" — PauliNet, a parallel approach.
@@ -384,6 +425,6 @@ Phase 1 implementation is **complete end-to-end**.
 | Hydrogen ground-state energy (imag-time) | $96^3$, $L=12$ | $-0.487\,E_h$ | $-0.500$ |
 | Virial ratio $2\langle T\rangle/\|\langle V\rangle\|$ (96³) | | $0.984$ | $1.000$ |
 
-The residual $\sim 2.6\%$ gap at $96^3$ is dominated by the Coulomb softening $\epsilon = h/2$; finer grids or $\epsilon \to 0$ extrapolation will close it. All 26 tests pass.
+The residual $\sim 2.6\%$ gap at $96^3$ is dominated by the Coulomb softening $\epsilon = h/2$; finer grids or $\epsilon \to 0$ extrapolation will close it. All 30 tests pass.
 
 Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3, 4, and 5 (up to neural water) follow a clearly scoped dependency trajectory — see §6.

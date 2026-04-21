@@ -2,13 +2,13 @@
 
 **Ezequiel Garcia**
 
-*Phase 1 technical report. Revision 2, April 2026.*
+*Phase 1 technical report. Revision 3, April 2026.*
 
 ---
 
 ## Abstract
 
-We describe the design and full implementation of **GATO** (*Grid Autodiff Theory of Orbitals*), a 3D Schrödinger solver written from first principles in [JAX](https://jax.readthedocs.io/). The long-term objective is a neural many-body wavefunction for the water molecule, with molecular geometry obtained from first principles by gradient descent on the energy. In this first phase we restrict ourselves to a single electron in a central potential and target the hydrogen 1s ground state energy, $E_0 = -0.5\,E_h$. The key design decisions — a cell-centered Cartesian real-space grid, matrix-free finite-difference operators, automatic differentiation end-to-end, and a variational treatment via the Rayleigh quotient — are motivated and specified. A second-order finite-difference Laplacian is implemented as a JIT-compiled local stencil and shown to reproduce the analytic plane-wave eigenvalue relation to $10^{-10}$ on periodic boundaries, and to exhibit $O(h^2)$ convergence to the continuum. The operator is self-adjoint under the discrete midpoint inner product to $10^{-8}$ with zero-Dirichlet boundary conditions. A softened Coulomb potential and a matrix-free `Hamiltonian` class complete the single-particle Schrödinger operator. Two variational solvers are implemented and verified: imaginary-time propagation on a grid ansatz and optax-driven VQE on an Equinox multilayer-perceptron ansatz with a learnable exponential envelope. On a $96^3$ grid with $L = 12\,a_0$, imaginary-time propagation recovers the hydrogen ground state energy to $E = -0.487\,E_h$ (2.6 % above the analytic $-0.5\,E_h$) with a virial ratio of $0.984$; residual error is dominated by the Coulomb-softening scale $\epsilon = h/2$. These results validate the substrate on which the remaining phases (multi-nucleus single-electron systems, mean-field electronic structure, and neural many-body wavefunctions for water) will be built.
+We describe the design and full implementation of **GATO** (*Grid Autodiff Theory of Orbitals*), a 3D Schrödinger solver written from first principles in [JAX](https://jax.readthedocs.io/). The long-term objective is a neural many-body wavefunction for the water molecule, with molecular geometry obtained from first principles by gradient descent on the energy. In this first phase we restrict ourselves to a single electron in a central potential and target the hydrogen 1s ground state energy, $E_0 = -0.5\,E_h$. The key design decisions — a cell-centered Cartesian real-space grid, matrix-free finite-difference operators, automatic differentiation end-to-end, and a variational treatment via the Rayleigh quotient — are motivated and specified. A second-order finite-difference Laplacian is implemented as a JIT-compiled local stencil and shown to reproduce the analytic plane-wave eigenvalue relation to $10^{-10}$ on periodic boundaries, and to exhibit $O(h^2)$ convergence to the continuum. The operator is self-adjoint under the discrete midpoint inner product to $10^{-8}$ with zero-Dirichlet boundary conditions. A softened Coulomb potential and a matrix-free `Hamiltonian` class complete the single-particle Schrödinger operator. Two variational solvers are implemented and verified: imaginary-time propagation on a grid ansatz and optax-driven VQE on an Equinox multilayer-perceptron ansatz with explicit Kato nuclear-cusp factors [Kato 1957]. On a $96^3$ grid with $L = 12\,a_0$, imaginary-time propagation recovers the hydrogen ground state energy to $E = -0.487\,E_h$ (2.6 % above the analytic $-0.5\,E_h$) with a virial ratio of $0.984$; residual error is dominated by the Coulomb-softening scale $\epsilon = h/2$. These results validate the substrate on which the remaining phases (multi-nucleus single-electron systems, mean-field electronic structure, and neural many-body wavefunctions for water) will be built.
 
 ---
 
@@ -162,11 +162,19 @@ Use of the full Rayleigh quotient (rather than $\langle\hat H\rangle$ alone) rem
 Two parametrizations are supported:
 
 - **Grid ansatz.** $\psi_\theta$ is literally the tensor of grid values; the parameter count equals $N^3$ ($\approx 2.6\times 10^5$ at $N=64$). This is the canonical representation used in imaginary-time propagation and serves as a numerical reference.
-- **Neural ansatz.** $\psi_\theta(\mathbf r) = f_\theta(\mathbf r)$ where $f_\theta$ is a small multilayer perceptron, implemented with Equinox. A learnable exponential envelope $e^{-\alpha\,r}$ is multiplied onto the network output to impose the correct asymptotic decay of a bound state, which we found essential for stable training:
+- **Neural ansatz with exact Kato cusps.** The wavefunction is factored as
 
 $$
-\psi_\theta(\mathbf r) \;=\; g_\theta(\mathbf r)\,\exp\bigl[-\alpha_\theta\,|\mathbf r|\bigr], \qquad g_\theta \text{ a tanh-MLP}. \tag{11}
+\psi_\theta(\mathbf r) \;=\; g_\theta(\mathbf r)\;\prod_{k} \exp\bigl[-Z_k\,|\mathbf r - \mathbf R_k|\bigr], \tag{11}
 $$
+
+where $g_\theta$ is a tanh-MLP (Equinox, three hidden layers of width 32 in the reference configuration) and the product runs over nuclei at positions $\{\mathbf R_k\}$ with charges $\{Z_k\}$. The second factor imposes Kato's nuclear cusp condition [Kato 1957]: for any eigenfunction of a Coulomb Hamiltonian,
+
+$$
+\left\langle\frac{1}{\psi}\,\frac{\partial \psi}{\partial r}\right\rangle_{\!\Omega} \;\xrightarrow[\,r \to \mathbf R_k\,]{} \;-Z_k, \tag{11'}
+$$
+
+where $\langle\cdot\rangle_\Omega$ denotes spherical average over the angular variables. The cusp factor contributes exactly $-Z_k$ to the radial log-derivative at each nucleus; the MLP $g_\theta$ is smooth at the nuclei, so its linear term $(\nabla g_\theta \cdot \hat{\mathbf r})$ averages to zero angularly. The cusp is therefore exact by construction, independent of network weights, and the optimizer need not rediscover it. An earlier version of this work used a single learnable exponential envelope $\exp(-\alpha_\theta |\mathbf r|)$; on hydrogen the optimizer drove $\alpha \approx 1 = Z_\text{H}$, so the architectures give essentially identical energies there, but the cusp formulation extends cleanly to multi-centre and many-electron systems.
 
 The neural ansatz has $O(10^3)$ parameters — three orders of magnitude fewer than the grid ansatz — while still being expressive enough to represent the 1s orbital to within the grid discretization error. Rotational symmetry is *not* imposed by the architecture, both for pedagogical transparency and because later phases (multi-nucleus systems, molecules) break it.
 
@@ -233,7 +241,7 @@ The gradient operator (also a central-difference stencil) correctly returns $(1,
 
 As an independent single-particle benchmark with an analytic eigenvalue, the 3D isotropic harmonic oscillator $V = \tfrac{1}{2}\omega^2 r^2$ with $\omega = 1$ has ground state $\psi_0(\mathbf r) = (\omega/\pi)^{3/4} e^{-\omega r^2/2}$ and energy $E_0 = \tfrac{3}{2}\omega = 1.5\,E_h$. Evaluating the Rayleigh quotient of the analytic state on a $48^3$ grid with $L = 10\,a_0$ yields the expected value to within 1 %. This exercises the full Hamiltonian composition (`kinetic` + multiplicative potential) end-to-end on a problem without a Coulomb singularity, isolating the discretization error from the softening error of Sec. 2.5.
 
-All twenty-six tests — seven for the grid and integration helpers, eight for the operators, three for the Hamiltonian, five for the potentials, three for the observables, and two end-to-end hydrogen tests — pass in approximately 70 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
+All thirty tests — seven for the grid and integration helpers, eight for the operators, three for the Hamiltonian, five for the potentials, three for the observables, four for the Kato-cusp factorization of the neural ansatz (verifying the spherically-averaged radial log-slope at each nucleus equals $-Z$, and that the wavefunction is finite everywhere despite the bare Coulomb singularity), and two end-to-end hydrogen tests — pass in approximately 47 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
 
 ---
 
@@ -259,15 +267,17 @@ The ground-state energy approaches the analytic $-0.5\,E_h$ as $h$ decreases. At
 
 ### 5.2 Neural VQE
 
-The neural ansatz (eq. 11) is an Equinox MLP with three hidden layers of width 32 and tanh activations, multiplied by a learnable exponential envelope $e^{-\alpha r}$ initialized at $\alpha = 1$. Total parameter count is approximately $2 \times 10^3$ — three orders of magnitude fewer than the corresponding grid ansatz. Optimization uses optax Adam with learning rate $10^{-3}$; Table 2 reports the result.
+The neural ansatz (eq. 11) is an Equinox MLP with three hidden layers of width 32 and tanh activations, multiplied by the Kato cusp factor $\exp(-Z|\mathbf r|)$ with $Z = 1$ fixed. Total parameter count is approximately $2\times 10^3$ — three orders of magnitude fewer than the corresponding grid ansatz. Optimization uses optax Adam with learning rate $10^{-3}$; Table 2 reports the result.
 
 **Table 2.** Hydrogen ground-state observables via neural VQE (Equinox MLP × $e^{-\alpha r}$, Adam).
 
 | $N$ | $L\ (a_0)$ | Steps | $E\ (E_h)$ | $\langle T\rangle\ (E_h)$ | $\langle V\rangle\ (E_h)$ | $2\langle T\rangle/|\langle V\rangle|$ |
 |-----|-----------|-------|-----------|------------------------|------------------------|---------------------------------------|
-| 40  | 10.0      | 2000  | $-0.4659$ | $+0.4379$              | $-0.9037$              | $0.9690$                              |
+| 40  | 10.0      | 2000  | $-0.4659$ | $+0.4376$              | $-0.9035$              | $0.9687$                              |
 
 The neural ansatz reaches energy comparable to imaginary-time propagation on a similarly coarse grid, using roughly three decades fewer parameters, and with a virial ratio within $3\%$ of unity. It was verified to descend monotonically from a random initialization (see `tests/test_hydrogen.py`). We expect longer optimization ($\gtrsim 10^4$ Adam steps) or a quasi-Newton method such as L-BFGS to close the gap with the grid ansatz; such runs are left for the production benchmark once GPU execution is available.
+
+A comparison run on the same grid and optimizer budget using the earlier learnable-envelope architecture $\psi = g_\theta \exp(-\alpha_\theta r)$ yielded $E = -0.46587\,E_h$, virial $= 0.9690$: statistically identical to the cusp-factored result above. The interpretation is that the optimizer had rediscovered $\alpha \approx Z = 1$ at the previous architecture's fixed point; pinning it to $Z$ a priori (the Kato-exact form) extracts no further energy for this problem, because the residual error is softening- and grid-limited rather than ansatz-shape-limited. The architectural change is nonetheless load-bearing for subsequent phases, where the factorization $\prod_k \exp(-Z_k|\mathbf r - \mathbf R_k|)$ provides cusps at multiple nuclei (Phases 2 and 4) and composes naturally with electron-electron Jastrow factors (Phase 5).
 
 ### 5.3 Acceptance criteria
 
@@ -309,14 +319,15 @@ src/gato/
     observables.py      kinetic_energy, potential_energy, virial_ratio, radial_density
     ansatz/
         grid.py         grid ansatz with hydrogenic / Gaussian / random init
-        neural.py       NeuralAnsatz: Equinox MLP × exp(-α r) envelope
+        neural.py       NeuralAnsatz: Equinox MLP × Π_k exp(-Z_k |r - R_k|)
     solvers/
         imag_time.py    imaginary-time Euler propagation
         vqe.py          optax-driven Rayleigh-quotient minimization
     physics/hydrogen.py end-to-end Phase 1 driver (CLI: gato-hydrogen)
 tests/
     test_grid.py, test_laplacian.py, test_potentials.py,
-    test_hamiltonian.py, test_observables.py, test_hydrogen.py    (26 tests)
+    test_hamiltonian.py, test_observables.py, test_cusp.py,
+    test_hydrogen.py                                             (30 tests)
 ```
 
 ### 6.2 Key abstractions
@@ -391,6 +402,7 @@ Project scaffolded with the `uv` Python project manager. Computations executed o
 - Frostig, R., Johnson, M. J., and Leary, C. (2018). *Compiling machine learning programs via high-level tracing.* SysML workshop.
 - Griffiths, D. J. and Schroeter, D. F. (2018). *Introduction to Quantum Mechanics*, 3rd ed. Cambridge University Press.
 - Javanainen, J., Eberly, J. H., and Su, Q. (1988). *Numerical simulations of multiphoton ionization and above-threshold electron spectra.* Physical Review A **38**, 3430.
+- Kato, T. (1957). *On the eigenfunctions of many-particle systems in quantum mechanics.* Communications on Pure and Applied Mathematics **10**, 151.
 - Kidger, P. and Garcia, C. (2021). *Equinox: neural networks in JAX via callable PyTrees and filtered transformations.* Differentiable Programming workshop at NeurIPS 2021.
 - LeVeque, R. J. (2007). *Finite Difference Methods for Ordinary and Partial Differential Equations.* SIAM.
 - Martin, R. M. (2004). *Electronic Structure: Basic Theory and Practical Methods.* Cambridge University Press.
