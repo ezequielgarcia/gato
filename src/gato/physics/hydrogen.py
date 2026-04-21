@@ -70,7 +70,15 @@ def solve_hydrogen(
         psi, history = imaginary_time(H, psi0, n_steps=n_steps, log_every=max(1, n_steps // 20))
         hist = list(zip(history.steps, history.energies))
     elif solver == "vqe_neural":
-        model = NeuralAnsatz(key=key, hidden=32, n_layers=3, alpha_init=1.0)
+        # Hydrogen: one nucleus at the origin, Z = 1. The cusp factor
+        # exp(-|r|) imposes Kato's exact boundary condition at the nucleus.
+        model = NeuralAnsatz(
+            key=key,
+            nuclei_positions=((0.0, 0.0, 0.0),),
+            nuclei_charges=(1.0,),
+            hidden=32,
+            n_layers=3,
+        )
         opt = optax.adam(1e-3)
         model_final, history = vqe(
             H, neural_ansatz, model, opt,
