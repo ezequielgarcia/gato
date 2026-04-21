@@ -298,6 +298,30 @@ Tests enable this automatically via `tests/conftest.py`.
 
 ## 5. Roadmap
 
+### 5.0 Systems at a glance
+
+Every physical system the project solves, across all six phases. A few molecules (H₂, LiH, H₂O) appear twice — intentionally — because they are solved first with mean-field and later with neural VMC, which gives us direct same-molecule method comparisons.
+
+| Phase | System | $n_e$ | Nuclei | Method | Hardware |
+|-------|--------|-------|--------|--------|----------|
+| 1 ✓ | H (hydrogen atom) | 1 | 1 | grid / neural VQE | CPU |
+| 1 ✓ | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, Z-scaled | CPU |
+| 2 | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces | CPU |
+| 3 | He (helium atom) | 2 | 1 | RHF / KS-DFT (SCF) | CPU |
+| 4 | H₂ | 2 | 2 | SCF + autodiff forces | CPU / 5070 |
+| 4 | LiH | 4 | 2 | SCF + autodiff forces | CPU / 5070 |
+| 4 | H₂O | 10 | 3 | SCF + autodiff forces at LDA level | 5070 |
+| 5 | H₂ | 2 | 2 | neural VMC (FermiNet-class) | 5070 |
+| 5 | LiH | 4 | 2 | neural VMC | 5070 |
+| 5 | HF | 10 | 2 | neural VMC; diatomic warm-up for H₂O | 5070 |
+| 5 | H₂O | 10 | 3 | neural VMC; headline single-molecule result | 5070 |
+| 6 | N₂ | 14 | 2 | neural VMC; triple-bond dissociation benchmark | cloud A100 |
+| 6 | $(\text{H}_2\text{O})_2$ water dimer | 20 | 6 | neural VMC; **terminal project target** | cloud A100 |
+| 6 (stretch) | $(\text{H}_2\text{O})_4$ | 40 | 12 | neural VMC | cloud A100+ |
+| 6 (stretch) | $\text{CH}_4 \cdot (\text{H}_2\text{O})_n$ | ~70 | ~12 | neural VMC (clathrate fragment) | cloud A100+ |
+
+**Distinct molecular systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, HF, H₂O, N₂, $(\text{H}_2\text{O})_2$, plus the two stretch goals. Each phase's Exit Criterion section below specifies the accuracy target for every member of that row.
+
 ### Phase 1 — Differentiable Hydrogen Atom *(complete)*
 
 Foundation: prove the machinery works by recovering the hydrogen ground state $E_0 = -0.5\,E_h$.
