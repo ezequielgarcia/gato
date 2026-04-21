@@ -2,7 +2,7 @@
 
 **Ezequiel Garcia**
 
-*Phase 1 technical report. Revision 3, April 2026.*
+*Phase 1 technical report. Revision 4, April 2026.*
 
 ---
 
@@ -279,7 +279,46 @@ The neural ansatz reaches energy comparable to imaginary-time propagation on a s
 
 A comparison run on the same grid and optimizer budget using the earlier learnable-envelope architecture $\psi = g_\theta \exp(-\alpha_\theta r)$ yielded $E = -0.46587\,E_h$, virial $= 0.9690$: statistically identical to the cusp-factored result above. The interpretation is that the optimizer had rediscovered $\alpha \approx Z = 1$ at the previous architecture's fixed point; pinning it to $Z$ a priori (the Kato-exact form) extracts no further energy for this problem, because the residual error is softening- and grid-limited rather than ansatz-shape-limited. The architectural change is nonetheless load-bearing for subsequent phases, where the factorization $\prod_k \exp(-Z_k|\mathbf r - \mathbf R_k|)$ provides cusps at multiple nuclei (Phases 2 and 4) and composes naturally with electron-electron Jastrow factors (Phase 5).
 
-### 5.3 Acceptance criteria
+### 5.3 Comparison of the two ansätze and their regime of applicability
+
+Having both the grid and neural ansätze working on the same problem makes it possible to compare them on a like-for-like basis, and to understand why each is necessary even though they return the same answer on hydrogen.
+
+**Parameter count and memory.** The grid ansatz has $N^3$ parameters — approximately $1.1 \times 10^5$ at $N = 48$ and $8.8 \times 10^5$ at $N = 96$. The neural ansatz has roughly $2 \times 10^3$ parameters in the reference configuration, independent of grid resolution. During evaluation, however, both representations require a materialized $(N,N,N)$ tensor for the discrete-grid integration of eq. (3), so the peak *working-set* memory is of the same order. The memory advantage of the neural ansatz is therefore latent in Phase 1 and only realized in phases where the wavefunction domain is too high-dimensional to tabulate on a grid.
+
+**Wall-clock cost per optimization step.** On a single CPU core in the present implementation, the grid-ansatz imaginary-time step costs one Hamiltonian application (seven-point stencil plus the precomputed potential multiply) and a vector update — $O(N^3)$ arithmetic. The neural-ansatz VQE step additionally evaluates the MLP at every grid point via `jax.vmap` and backpropagates through the result via `jax.value_and_grad`. Table 3 summarises observed wall-clock times on the Phase 1 reference runs.
+
+**Table 3.** Wall-clock time for representative Phase 1 runs, single CPU core, float64.
+
+| Run | Grid | Steps | Wall time | Per-step |
+|-----|-----|-------|-----------|----------|
+| imag-time, grid ansatz | $48^3$ | 2000 | $\sim\!20$ s | 10 ms |
+| imag-time, grid ansatz | $96^3$ | 4000 | $\sim\!80$ s | 20 ms |
+| VQE, neural ansatz | $40^3$ | 2000 | $\sim\!100$ s | 50 ms |
+| VQE, neural ansatz | $40^3$ | 400 (test suite) | $\sim\!30$ s | 75 ms |
+
+Per-step, the neural ansatz is roughly five times slower than the grid ansatz at comparable resolution, because each step evaluates and differentiates the MLP at every grid point. Both kernels are JIT-compiled to XLA and amortize compilation across steps.
+
+**Ground-state accuracy.** At converged Phase 1 parameters the two ansätze reach the same energy to within the shot-to-shot variation of the optimizer ($< 10^{-4}\,E_h$). Neither is limited by ansatz expressivity for this problem — the limiting factor is grid discretization and Coulomb softening.
+
+**Why implement the neural ansatz in Phase 1 at all?** Given that the grid ansatz is faster and equally accurate for hydrogen, there are two reasons for carrying the neural ansatz through Phase 1 rather than deferring it until it is strictly necessary.
+
+1. *Infrastructure development on an analytic benchmark.* The `jax.value_and_grad` / optax / `jax.vmap` pipeline required for Phases 5 (neural VMC for H₂O) is complex, and debugging it on a 30-dimensional stochastic-integration problem where every component may be wrong simultaneously is impractical. Exercising the same pipeline on a problem with a known analytic ground state ($-0.5\,E_h$) catches implementation errors early and in isolation.
+
+2. *Continuity of the architecture across phases.* The `NeuralAnsatz` class — MLP composed with a Kato cusp factor — is the same object that will be extended in Phase 2 (add a second nucleus), Phase 5 (add a Slater determinant of neural orbitals + electron-electron Jastrow). Establishing and testing it here ensures that each later phase substitutes one component at a time, against a scaffold that is already verified.
+
+**Dimensional scaling.** The two ansätze address different regimes of the curse of dimensionality. For a wavefunction $\psi(\mathbf r_1, \ldots, \mathbf r_n)$ on an $n$-electron system discretized on a grid with $N$ points per 3D axis, the grid representation has $N^{3n}$ parameters:
+
+| System | Dimensionality | Grid parameters | Neural parameters |
+|---|---|---|---|
+| Hydrogen (Phase 1) | 3 | $N^3 \sim 10^5$ | $\sim 10^3$ |
+| Helium direct, $\psi(\mathbf r_1, \mathbf r_2)$ | 6 | $N^6 \sim 10^{10}$ | $\sim 10^4$ |
+| Water, $\psi(\mathbf r_1, \ldots, \mathbf r_{10})$ | 30 | $N^{30} \sim 10^{54}$ (infeasible) | $\sim 10^5$–$10^6$ |
+
+The grid ansatz is untenable beyond roughly $n = 2$ in the direct many-body formulation. The mean-field strategy adopted in Phases 3 and 4 keeps the grid tractable by representing each occupied orbital as a separate 3D function, but a full many-body wavefunction for water requires abandoning the grid entirely and evaluating the neural ansatz at Monte Carlo samples — the regime of Phase 5.
+
+In summary: grid ansatz is preferred while the wavefunction domain remains three-dimensional and a structured grid fits in memory; neural ansatz becomes mandatory as soon as the domain dimensionality exceeds roughly $3\text{–}6$, which is unavoidable at the project's headline target. Phase 1 maintains both so that the transition is incremental rather than a rewrite.
+
+### 5.4 Acceptance criteria
 
 The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$:
 
@@ -288,7 +327,7 @@ The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$
 - **Orthonormality.** $\langle \psi|\psi\rangle = 1$ to float64 precision after post-training normalization.
 - **Qualitative radial density.** The binned $|\psi|^2$ on the converged grid ansatz peaks near $r \approx 1\,a_0$, consistent with the analytic $P(r) = 4r^2 e^{-2r}$.
 
-### 5.4 Reproducibility
+### 5.5 Reproducibility
 
 All results in this section are reproduced by
 
