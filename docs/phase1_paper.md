@@ -2,7 +2,7 @@
 
 **Ezequiel Garcia**
 
-*Phase 1 technical report. Revision 6, April 2026.*
+*Phase 1 technical report. Revision 7, April 2026.*
 
 ---
 
@@ -35,7 +35,27 @@ The GATO project (*Grid Autodiff Theory of Orbitals*) aims to exploit this capab
 5. **Phase 5.** Neural many-body wavefunctions in the FermiNet family [Pfau et al. 2020, Hermann et al. 2020] applied to a ladder of single molecules of increasing electron count: $\text{H}_2$ (2 e⁻) → LiH (4 e⁻) → HF (10 e⁻) → H₂O (10 e⁻). Production runs on a single consumer GPU (RTX 5070) with mixed FP32/FP64 precision.
 6. **Phase 6.** Strong-correlation benchmarks and the water dimer: N₂ (14 e⁻, triple-bond dissociation) and $(\text{H}_2\text{O})_2$ (20 e⁻, hydrogen bonding), the project's terminal target. Production runs burst to a rented cloud A100 80 GB where native FP64 throughput and larger VRAM become load-bearing; development continues on the local GPU.
 
-This report specifies the Phase 1 framework, documents the operators already implemented and verified, and motivates the design so that the later phases can be added without structural rework.
+This report specifies the Phase 1 framework, documents the operators already implemented and verified, and motivates the design so that the later phases can be added without structural rework. Table 1 catalogs every physical system solved across the six phases. A few molecules (H₂, LiH, H₂O) appear twice by design — once at mean-field level (Phase 4) and again with neural variational Monte Carlo (Phase 5) — because same-molecule method comparisons are the cleanest demonstration of the value added by the correlated-wavefunction treatment.
+
+**Table 1.** Physical systems solved across the six phases of the GATO roadmap.
+
+| Phase | System | $n_e$ | Nuclei | Method | Hardware |
+|-------|--------|-------|--------|--------|----------|
+| 1 | H (hydrogen atom) | 1 | 1 | grid / neural VQE | CPU |
+| 1 | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, $Z$-scaled | CPU |
+| 2 | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces | CPU |
+| 3 | He (helium atom) | 2 | 1 | RHF / KS-DFT, SCF | CPU |
+| 4 | H₂ | 2 | 2 | SCF + autodiff forces | CPU / 5070 |
+| 4 | LiH | 4 | 2 | SCF + autodiff forces | CPU / 5070 |
+| 4 | H₂O | 10 | 3 | SCF at LDA level | 5070 |
+| 5 | H₂ | 2 | 2 | neural VMC (FermiNet-class) | 5070 |
+| 5 | LiH | 4 | 2 | neural VMC | 5070 |
+| 5 | HF | 10 | 2 | neural VMC | 5070 |
+| 5 | H₂O | 10 | 3 | neural VMC | 5070 |
+| 6 | N₂ | 14 | 2 | neural VMC, strong correlation | cloud A100 |
+| 6 | $(\text{H}_2\text{O})_2$ | 20 | 6 | neural VMC, terminal project target | cloud A100 |
+| 6 | $(\text{H}_2\text{O})_4$ (stretch) | 40 | 12 | neural VMC | cloud A100+ |
+| 6 | $\text{CH}_4 \cdot (\text{H}_2\text{O})_n$ (stretch) | ~70 | ~12 | clathrate fragment | cloud A100+ |
 
 The rest of the paper is organized as follows. Section 2 develops the discretization and operator theory. Section 3 describes the variational architecture and neural wave-function ansatz. Section 4 presents numerical results for the core operators. Section 5 reports the end-to-end hydrogen benchmark. Section 6 describes the implementation. Section 7 sketches the extensions to later phases. Section 8 concludes.
 
@@ -270,9 +290,9 @@ All runs use the softened Coulomb potential (eq. 9) with $\epsilon = h/2$ and ze
 
 ### 5.1 Imaginary-time propagation on the grid ansatz
 
-The grid ansatz is initialized as $\psi_0(\mathbf r) = e^{-r}$ (the analytic 1s shape, up to normalization) and propagated in imaginary time with Euler step $\Delta\tau = h^2/10$ until convergence. Table 1 summarizes the converged observables at three resolutions.
+The grid ansatz is initialized as $\psi_0(\mathbf r) = e^{-r}$ (the analytic 1s shape, up to normalization) and propagated in imaginary time with Euler step $\Delta\tau = h^2/10$ until convergence. Table 2 summarizes the converged observables at three resolutions.
 
-**Table 1.** Hydrogen ground-state observables via imaginary-time propagation on the grid ansatz.
+**Table 2.** Hydrogen ground-state observables via imaginary-time propagation on the grid ansatz.
 
 | $N$ | $L\ (a_0)$ | $h\ (a_0)$ | Steps | $E\ (E_h)$ | $\langle T\rangle\ (E_h)$ | $\langle V\rangle\ (E_h)$ | $2\langle T\rangle/|\langle V\rangle|$ |
 |-----|-----------|-----------|-------|-----------|------------------------|------------------------|---------------------------------------|
@@ -284,9 +304,9 @@ The ground-state energy approaches the analytic $-0.5\,E_h$ as $h$ decreases. At
 
 ### 5.2 Neural VQE
 
-The neural ansatz (eq. 11) is an Equinox MLP with three hidden layers of width 32 and tanh activations, multiplied by the Kato cusp factor $\exp(-Z|\mathbf r|)$ with $Z = 1$ fixed. Total parameter count is approximately $2\times 10^3$ — three orders of magnitude fewer than the corresponding grid ansatz. Optimization uses optax Adam with learning rate $10^{-3}$; Table 2 reports the result.
+The neural ansatz (eq. 11) is an Equinox MLP with three hidden layers of width 32 and tanh activations, multiplied by the Kato cusp factor $\exp(-Z|\mathbf r|)$ with $Z = 1$ fixed. Total parameter count is approximately $2\times 10^3$ — three orders of magnitude fewer than the corresponding grid ansatz. Optimization uses optax Adam with learning rate $10^{-3}$; Table 3 reports the result.
 
-**Table 2.** Hydrogen ground-state observables via neural VQE (Equinox MLP × $e^{-\alpha r}$, Adam).
+**Table 3.** Hydrogen ground-state observables via neural VQE (Equinox MLP × $e^{-\alpha r}$, Adam).
 
 | $N$ | $L\ (a_0)$ | Steps | $E\ (E_h)$ | $\langle T\rangle\ (E_h)$ | $\langle V\rangle\ (E_h)$ | $2\langle T\rangle/|\langle V\rangle|$ |
 |-----|-----------|-------|-----------|------------------------|------------------------|---------------------------------------|
@@ -302,9 +322,9 @@ Having both the grid and neural ansätze working on the same problem makes it po
 
 **Parameter count and memory.** The grid ansatz has $N^3$ parameters — approximately $1.1 \times 10^5$ at $N = 48$ and $8.8 \times 10^5$ at $N = 96$. The neural ansatz has roughly $2 \times 10^3$ parameters in the reference configuration, independent of grid resolution. During evaluation, however, both representations require a materialized $(N,N,N)$ tensor for the discrete-grid integration of eq. (3), so the peak *working-set* memory is of the same order. The memory advantage of the neural ansatz is therefore latent in Phase 1 and only realized in phases where the wavefunction domain is too high-dimensional to tabulate on a grid.
 
-**Wall-clock cost per optimization step.** On a single CPU core in the present implementation, the grid-ansatz imaginary-time step costs one Hamiltonian application (seven-point stencil plus the precomputed potential multiply) and a vector update — $O(N^3)$ arithmetic. The neural-ansatz VQE step additionally evaluates the MLP at every grid point via `jax.vmap` and backpropagates through the result via `jax.value_and_grad`. Table 3 summarises observed wall-clock times on the Phase 1 reference runs.
+**Wall-clock cost per optimization step.** On a single CPU core in the present implementation, the grid-ansatz imaginary-time step costs one Hamiltonian application (seven-point stencil plus the precomputed potential multiply) and a vector update — $O(N^3)$ arithmetic. The neural-ansatz VQE step additionally evaluates the MLP at every grid point via `jax.vmap` and backpropagates through the result via `jax.value_and_grad`. Table 4 summarises observed wall-clock times on the Phase 1 reference runs.
 
-**Table 3.** Wall-clock time for representative Phase 1 runs, single CPU core, float64.
+**Table 4.** Wall-clock time for representative Phase 1 runs, single CPU core, float64.
 
 | Run | Grid | Steps | Wall time | Per-step |
 |-----|-----|-------|-----------|----------|
@@ -337,9 +357,9 @@ In summary: grid ansatz is preferred while the wavefunction domain remains three
 
 ### 5.4 Hydrogenic $Z$-scaling
 
-The same driver, with nuclear charge $Z$ passed through `softened_coulomb` and the `NeuralAnsatz` cusp, reproduces the one-electron ground state of H, He⁺, and Li²⁺. The analytic ground-state energy of a hydrogenic atom with charge $Z$ is $E_0(Z) = -Z^2/2$. Table 3 reports the values obtained with imaginary-time propagation on a $48^3$ grid (box size scaled as $1/Z$ to keep the orbital resolution comparable) using the 4th-order Laplacian.
+The same driver, with nuclear charge $Z$ passed through `softened_coulomb` and the `NeuralAnsatz` cusp, reproduces the one-electron ground state of H, He⁺, and Li²⁺. The analytic ground-state energy of a hydrogenic atom with charge $Z$ is $E_0(Z) = -Z^2/2$. Table 5 reports the values obtained with imaginary-time propagation on a $48^3$ grid (box size scaled as $1/Z$ to keep the orbital resolution comparable) using the 4th-order Laplacian.
 
-**Table 3.** Hydrogenic ground-state energies (imaginary-time, grid ansatz, 4th-order stencil, $N=48$).
+**Table 5.** Hydrogenic ground-state energies (imaginary-time, grid ansatz, 4th-order stencil, $N=48$).
 
 | Atom | $Z$ | $L\ (a_0)$ | $E\ (E_h)$ | $E_{\rm exact}\ (E_h)$ | rel. error |
 |------|-----|-----------|-----------|-----------------------|-----------|
@@ -357,7 +377,7 @@ $$
 E(\epsilon) \;=\; E_0 + a\,\epsilon + b\,\epsilon^2 \;+\; \mathcal O(\epsilon^3). \tag{12}
 $$
 
-**Table 4.** Hydrogen ground-state energy as a function of softening at fixed $N = 64$, $L = 12\,a_0$, 4th-order stencil. Lanczos was used as the eigensolver for speed.
+**Table 6.** Hydrogen ground-state energy as a function of softening at fixed $N = 64$, $L = 12\,a_0$, 4th-order stencil. Lanczos was used as the eigensolver for speed.
 
 | $\epsilon\ (a_0)$ | $E\ (E_h)$ |
 |-------------------|-----------|
@@ -465,7 +485,7 @@ The `vqe` solver is a pure function that closes over the Hamiltonian and ansatz,
 
 ### 6.3 Cost accounting
 
-At $N = 96$, one application of the Hamiltonian amounts to a 7-point stencil plus a point-wise potential multiply — approximately $10^7$ floating-point operations and a single $N^3$ buffer read. The 4000-step imaginary-time run in Table 1 thus performs $\sim 4\times 10^{10}$ flops, observed in practice as tens of seconds on a single CPU core. The corresponding dense-matrix representation of $\hat H$ would require $(96^3)^2 \times 8\,\text{B} \approx 5.6$ TB and is utterly infeasible; this is the practical payoff of the matrix-free design.
+At $N = 96$, one application of the Hamiltonian amounts to a 7-point stencil plus a point-wise potential multiply — approximately $10^7$ floating-point operations and a single $N^3$ buffer read. The 4000-step imaginary-time run in Table 2 thus performs $\sim 4\times 10^{10}$ flops, observed in practice as tens of seconds on a single CPU core. The corresponding dense-matrix representation of $\hat H$ would require $(96^3)^2 \times 8\,\text{B} \approx 5.6$ TB and is utterly infeasible; this is the practical payoff of the matrix-free design.
 
 ---
 
