@@ -2,7 +2,7 @@
 
 **Grid Autodiff Theory of Orbitals**
 
-A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The long-term trajectory goes hydrogen → $\text{H}_2^+$ → helium → mean-field molecules → a neural many-body wavefunction for water, with molecular geometry obtained from first principles by gradient descent on the energy. The whole pipeline stays differentiable, matrix-free, and memory-efficient throughout.
+A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The long-term trajectory goes hydrogen → $\text{H}_2^+$ → helium → mean-field molecules → a neural many-body wavefunction for H₂, LiH, HF, and H₂O → culminating in the water dimer $(\text{H}_2\text{O})_2$, the smallest piece of condensed water. Development and Phase 1–5 production run on a single consumer GPU (RTX 5070); Phase 6 (N₂, water dimer) bursts to a rented A100 for final training runs. The whole pipeline stays differentiable, matrix-free, and memory-efficient throughout, with molecular geometry obtained from first principles by gradient descent on the energy.
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
 
@@ -358,34 +358,62 @@ Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) to do rea
 
 **Exit criterion:** H₂O bond angle within $1^\circ$ of the experimental $104.5^\circ$ at the LDA level; correlating with published DFT-LDA values. GPU helpful but not required.
 
-### Phase 5 — Neural many-body wavefunction for water
+### Phase 5 — Neural many-body wavefunction: single molecules
 
-The neural-VMC milestone and the project's headline result. Treat the 10 electrons of H₂O explicitly, parametrize $\Psi(\mathbf r_1, \ldots, \mathbf r_{10})$ as a neural Slater-backflow ansatz (FermiNet / PauliNet family), and obtain the geometry at near-chemical accuracy.
+The neural-VMC milestone. Treat electrons explicitly; parametrize $\Psi(\mathbf r_1, \ldots, \mathbf r_n)$ as a neural Slater-backflow ansatz (FermiNet / PauliNet family) evaluated at Monte Carlo samples. Rather than jumping directly to water, we ramp up through a progression of single molecules of increasing electron count, so each step validates the infrastructure against a less complicated target.
+
+**Core infrastructure (shared by every molecule in this phase):**
 
 - [ ] `ansatz/determinant.py` — Slater determinants of learned orbitals
 - [ ] `ansatz/fermi_net.py` — permutation-equivariant backflow network with per-electron features and pairwise streams
-- [ ] Jastrow factor with explicit e–e and e–n cusp conditions
+- [ ] Jastrow factor with explicit e–e and e–n cusp conditions (reuses the Kato cusp machinery from Phase 1)
 - [ ] `sampling.py` — Metropolis–Hastings sampler over $|\Psi|^2$ in $3N$-dimensional space
 - [ ] `solvers/vmc.py` — variational Monte Carlo with `kfac-jax` natural-gradient optimizer
 - [ ] Joint optimization of network weights + nuclear positions
-- [ ] H₂O geometry from first principles: $\theta_{\text{HOH}} = 104.5^\circ \pm 0.5^\circ$, $d_{\text{OH}} = 0.958 \pm 0.01$ Å
 
-**Exit criterion:** published-FermiNet-equivalent quality on the H₂O geometry. **GPU required from day one** (published water runs take hours on multi-GPU).
+**Molecule progression:**
+
+| Sub-target | Electrons | Why this molecule |
+|---|---|---|
+| 5a. H₂ | 2 | smallest VMC test; exact energy $-1.1744\,E_h$ known to 8 decimals; validates determinant + Jastrow machinery before scaling |
+| 5b. LiH | 4 | first polar diatomic; 4-electron closed-shell; bond length $\approx 3.015\,a_0$ |
+| 5c. HF | 10 | diatomic stepping stone to water: same electron count, only a bond length to optimize (no angle) |
+| 5d. H₂O | 10 | the project's headline single-molecule result: bond angle $\approx 104.5°$, bond length $\approx 0.958\,$ Å |
+
+**Hardware**: the author's RTX 5070 (12 GB, consumer Blackwell). Phase-5 runs use mixed precision — FP32 for the network forward pass, FP64 only for the local-energy accumulator — to work around the 5070's $\approx 1/32$ FP64 throughput. Expected wall-clock: single-digit hours for H₂/LiH, ~1 day each for HF and H₂O at chemical-accuracy convergence.
+
+**Exit criterion:** H₂O geometry recovered to within $1°$ of $104.5°$ and $0.01\,$ Å of $0.958\,$ Å, at energy within $\sim 5\,$ mHa of the exact nonrelativistic value $-76.44\,E_h$. Beyond-that targets continue in Phase 6.
+
+### Phase 6 — Strong correlation and the water dimer
+
+The end-target for the project: $(\text{H}_2\text{O})_2$, the smallest piece of condensed water and the foundational unit of ice-Ih. Also a natural home for classical strong-correlation benchmarks that demonstrate where neural VMC pays off over mean-field.
+
+- [ ] **N₂ (14 e⁻)** — canonical strong-correlation benchmark; triple-bond dissociation curve where mean-field methods notoriously fail. Published by FermiNet and PauliNet; direct apples-to-apples comparison.
+- [ ] **$(\text{H}_2\text{O})_2$ water dimer (20 e⁻)** — hydrogen-bonded system, ~5 kcal/mol binding energy sitting on top of two monomer energies. The first molecule where the project's "planetary ices" motivation actually starts: (H₂O)₂ is what ice-Ih is built from.
+- [ ] (stretch) **$(\text{H}_2\text{O})_4$** and larger water clusters as the compute allows
+- [ ] (stretch) A methane clathrate fragment CH₄·(H₂O)ₙ — relevant to Titan
+
+**Hardware**: rented cloud A100 80 GB (Lambda, RunPod, Paperspace) at $1-2 / hr on-demand, for production runs. Native FP64 throughput, 80 GB VRAM, and a typical water-dimer run at $\sim 12\text{-}36$ hours translates to roughly $\$20\text{-}75$ per molecule. Development and debugging continue to happen on the local 5070; the cloud GPU is only spun up for the final production training run, per molecule.
+
+**Exit criterion:** water-dimer binding energy within 1 kcal/mol of the reference CCSD(T) value $\approx -5.0\,$ kcal/mol at the equilibrium geometry; equilibrium O–O distance within $0.05\,$ Å of the experimental $2.98\,$ Å.
+
+Past Phase 6 (larger water clusters, periodic ice, condensed methane) is genuine HPC territory (multi-GPU A100/H100 nodes or real cluster allocations), and is scope for a follow-on project.
 
 ---
 
 ## 6. Dependencies per phase
 
-The package stays pure-Python, pure-JAX throughout. Total additional dependencies across all five phases: **two runtime packages**.
+The package stays pure-Python, pure-JAX throughout. Total additional dependencies across all six phases: **two runtime packages**.
 
-| Phase | New runtime deps | Dev-only deps | Why |
-|---|---|---|---|
-| 1 (done) | `jax`, `optax`, `equinox`, `numpy`, `scipy`, `matplotlib` | `pytest` | base stack |
-| 2 (H₂⁺) | none | none | multi-center potential + autodiff forces only |
-| 3 (helium SCF) | none | none | FFT is in `jax.numpy.fft`; LDA is ~10 lines of math |
-| 4 (mean-field molecules) | none | **`pyscf`** (optional) | pyscf is only for cross-validating our numbers against a trusted reference |
-| 5 (neural water) | **`kfac-jax`**, optional **`blackjax`** | none | KFAC natural-gradient is near-essential for VMC convergence; blackjax provides HMC if we want it (Metropolis is easy to hand-roll) |
-| all, on GPU | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
+| Phase | Hardware | New runtime deps | Dev-only deps | Why |
+|---|---|---|---|---|
+| 1 (done) | laptop CPU | `jax`, `optax`, `equinox`, `numpy`, `scipy`, `matplotlib` | `pytest` | base stack |
+| 2 (H₂⁺) | laptop CPU | none | none | multi-center potential + autodiff forces only |
+| 3 (helium SCF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; LDA is ~10 lines of math |
+| 4 (mean-field molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf is only for cross-validating our numbers against a trusted reference |
+| 5 (neural VMC: H₂ → H₂O) | local 5070 (FP32 net, FP64 energy accumulator) | **`kfac-jax`**, optional **`blackjax`** | none | KFAC natural-gradient is near-essential for VMC convergence; blackjax provides HMC if we want it (Metropolis is easy to hand-roll) |
+| 6 (N₂, water dimer) | cloud A100 80 GB ($1-2/hr) | same as Phase 5 | none | development on the 5070, production runs burst to cloud where native FP64 + 80 GB VRAM matter |
+| all, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
 
 What's **not** needed:
 
@@ -438,4 +466,4 @@ Phase 1 implementation is **complete end-to-end**.
 
 The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 40 tests pass.
 
-Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3, 4, and 5 (up to neural water) follow a clearly scoped dependency trajectory — see §6.
+Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3 and 4 (helium SCF → mean-field molecules) follow on the local machine; Phase 5 runs on a single consumer GPU (RTX 5070) over a ladder of molecules (H₂ → LiH → HF → H₂O); Phase 6 bursts to a rented cloud A100 for N₂ and the water dimer. See §5 and §6 for the scoped hardware and dependency trajectory.

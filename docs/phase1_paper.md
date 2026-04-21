@@ -2,7 +2,7 @@
 
 **Ezequiel Garcia**
 
-*Phase 1 technical report. Revision 5, April 2026.*
+*Phase 1 technical report. Revision 6, April 2026.*
 
 ---
 
@@ -26,13 +26,14 @@ in Hartree atomic units ($\hbar = m_e = e = 4\pi\varepsilon_0 = 1$). Two classic
 
 Both approaches tend to obscure the physics behind layers of hand-tuned linear algebra, and neither is naturally differentiable: obtaining derivatives of an observable with respect to geometric or gauge parameters typically requires laborious manual coding of the adjoint equations. The emergence of machine-learning infrastructure based on high-performance automatic differentiation [Bradbury et al. 2018, Frostig et al. 2018] makes it attractive to revisit the problem with modern tools. Libraries such as JAX allow an entire Hamiltonian-evaluation pipeline to be written as a pure Python function, compiled once to XLA, and then freely composed with `jax.grad`, `jax.jit`, and `jax.vmap`.
 
-The GATO project (*Grid Autodiff Theory of Orbitals*) aims to exploit this capability. The long-term target is a neural many-body wavefunction for the water molecule, with the molecular geometry obtained from first principles by gradient descent on the energy. The project is organized as a sequence of phases of increasing physical complexity:
+The GATO project (*Grid Autodiff Theory of Orbitals*) aims to exploit this capability. The long-term target is the water dimer $(\text{H}_2\text{O})_2$, the smallest piece of condensed water and the foundational unit of ice-Ih, treated from first principles with a neural many-body wavefunction. Molecular geometry is obtained throughout by gradient descent on the energy. The project is organized as a sequence of phases of increasing physical complexity:
 
 1. **Phase 1 (this report).** Single electron in a central potential; validation on the hydrogen atom.
 2. **Phase 2.** Multi-nucleus single-electron systems ($\text{H}_2^+$): multi-center potentials and geometry optimization via autodifferentiated forces.
 3. **Phase 3.** Many-electron mean-field electronic structure (restricted Hartree–Fock and Kohn–Sham density functional theory), validated on helium.
 4. **Phase 4.** Mean-field molecules at fixed geometry (H₂, LiH, H₂O) followed by full geometry optimization.
-5. **Phase 5.** Neural many-body wavefunctions in the FermiNet family [Pfau et al. 2020, Hermann et al. 2020] for the water molecule, with variational Monte Carlo integration.
+5. **Phase 5.** Neural many-body wavefunctions in the FermiNet family [Pfau et al. 2020, Hermann et al. 2020] applied to a ladder of single molecules of increasing electron count: $\text{H}_2$ (2 e⁻) → LiH (4 e⁻) → HF (10 e⁻) → H₂O (10 e⁻). Production runs on a single consumer GPU (RTX 5070) with mixed FP32/FP64 precision.
+6. **Phase 6.** Strong-correlation benchmarks and the water dimer: N₂ (14 e⁻, triple-bond dissociation) and $(\text{H}_2\text{O})_2$ (20 e⁻, hydrogen bonding), the project's terminal target. Production runs burst to a rented cloud A100 80 GB where native FP64 throughput and larger VRAM become load-bearing; development continues on the local GPU.
 
 This report specifies the Phase 1 framework, documents the operators already implemented and verified, and motivates the design so that the later phases can be added without structural rework.
 
@@ -484,7 +485,9 @@ with nuclear positions $\{\mathbf R_k\}$ and charges $\{Z_k\}$ as first-class nu
 
 **Phase 4 — mean-field molecules at optimized geometry.** Phases 2 and 3 combine: closed-shell H₂, LiH, and H₂O are treated at the RHF or Kohn–Sham LDA level with multiple occupied orbitals, multi-centre potentials, and geometry optimization by autodifferentiated forces. The exit benchmark is the H₂O bond angle within $1^\circ$ of the experimental $104.5^\circ$ at the LDA level.
 
-**Phase 5 — neural many-body wavefunctions for water.** The 10 electrons of H₂O are treated explicitly via a FermiNet-family ansatz [Pfau et al. 2020, Hermann et al. 2020], evaluated on Monte Carlo samples and optimized by variational Monte Carlo with a Kronecker-factored natural gradient optimizer. This is the project's headline result: recovery of the water geometry from a many-electron wavefunction at near-chemical accuracy. GPU execution is mandatory.
+**Phase 5 — neural many-body wavefunctions: single molecules.** Electrons are treated explicitly via a FermiNet-family ansatz [Pfau et al. 2020, Hermann et al. 2020] evaluated on Monte Carlo samples in the $3n$-dimensional electron configuration space, replacing the real-space grid integration used in Phases 1–4. Rather than targeting water directly, we scale up through a ladder of single molecules: $\text{H}_2$ (2 e⁻) validates the determinant and Jastrow machinery on an exactly-known ground state ($E_0 = -1.17447\,E_h$); LiH (4 e⁻) introduces the first polar diatomic; HF (10 e⁻) is a natural same-electron-count stepping stone to H₂O with only a bond length to optimize; H₂O (10 e⁻) is the phase's headline result, with geometry $\theta_{\rm HOH} \approx 104.5°$ and $d_{\rm OH} \approx 0.958\,$ Å recovered from the neural wavefunction by gradient descent on the Born–Oppenheimer energy. Production runs target a single consumer-class GPU (RTX 5070 Blackwell, 12 GB). Because consumer NVIDIA GPUs cripple FP64 throughput by roughly $1/32$ relative to FP32, the implementation uses selective precision: FP32 for the backflow network forward and backward passes, FP64 only for the local-energy accumulator and the final Monte Carlo average. This trades a small accuracy loss at the per-sample level for a $\sim 30\times$ wall-clock speedup relative to full-FP64 on the same card.
+
+**Phase 6 — strong correlation and the water dimer.** Two targets that sit beyond the reach of comfortable single-consumer-GPU compute. *(i) $N_2$ (14 e⁻, triple bond)* is the canonical strong-correlation benchmark where mean-field methods produce visibly wrong dissociation curves; reproducing the FermiNet and PauliNet published numbers on $N_2$ is the validation that the project's neural VMC implementation is genuinely competitive. *(ii) $(\text{H}_2\text{O})_2$ (20 e⁻)* is the project's terminal target: a hydrogen-bonded dimer with a binding energy of $\sim 5\,$ kcal/mol sitting on top of twice the monomer energy. The dimer is the foundational unit of ice-Ih and the entry point to the "planetary ices" motivation that originally scoped the project. Production runs for Phase 6 burst to a rented cloud A100 80 GB (Lambda Labs / RunPod / Paperspace, $\sim\!\$1-2/\text{hr}$ on demand), where native $\sim\!1/2$ FP64 throughput and $80\,$ GB of VRAM become practically important. Development and debugging continue on the local GPU; the cloud allocation is spun up only for the final per-molecule production training run, which at $12$–$36\,$ hours translates to $\$20$–$75$ per molecule. No multi-GPU or real HPC cluster time is anticipated within the project's current scope; the genuine HPC regime (periodic ice, larger water clusters, clathrates) is deferred to a follow-on effort.
 
 ---
 
@@ -492,13 +495,13 @@ with nuclear positions $\{\mathbf R_k\}$ and charges $\{Z_k\}$ as first-class nu
 
 We have specified the mathematical framework, numerical methods, software architecture, and validation targets for Phase 1 of GATO, implemented the corresponding package, and reported end-to-end results on the hydrogen atom. The matrix-free finite-difference operators forming the numerical core are JIT-compiled and verified against analytic plane-wave eigenvalue relations, Hermiticity, continuum convergence, and an isotropic harmonic-oscillator benchmark. Using these operators and a softened Coulomb potential, imaginary-time propagation on a grid ansatz recovers the hydrogen ground state to $E = -0.487\,E_h$ on a $96^3$ grid — $2.6\%$ above the analytic $-0.5\,E_h$, with a virial ratio within $1.6\%$ of unity. A neural variational ansatz with approximately $2\times 10^3$ parameters reaches comparable accuracy on a coarser grid. The residual energy error is softening-limited rather than discretization-limited and is expected to close under Richardson-style extrapolation in $(h, \epsilon)$ on a GPU-enabled benchmark sweep.
 
-The variational framework, the matrix-free operator abstraction, and the ansatz/solver separation anticipate the subsequent phases. Phase 2 ($\text{H}_2^+$ with autodifferentiated forces) requires only a multi-centre potential and reuses the full Phase 1 variational machinery. Phase 3 introduces many-electron mean-field self-consistency on a single centre (helium). Phase 4 combines these into geometry-optimized molecules at the mean-field level. Phase 5 treats the electrons of water explicitly with a neural many-body wavefunction and variational Monte Carlo, requiring GPU execution but no redesign of the core abstractions developed here.
+The variational framework, the matrix-free operator abstraction, and the ansatz/solver separation anticipate the subsequent phases. Phase 2 ($\text{H}_2^+$ with autodifferentiated forces) requires only a multi-centre potential and reuses the full Phase 1 variational machinery. Phase 3 introduces many-electron mean-field self-consistency on a single centre (helium). Phase 4 combines these into geometry-optimized molecules at the mean-field level. Phase 5 treats electrons explicitly with a neural many-body wavefunction and variational Monte Carlo, ramping up through $\text{H}_2$ → LiH → HF → H₂O on a single consumer GPU with selective FP32/FP64 precision. Phase 6 targets $N_2$ and the water dimer $(\text{H}_2\text{O})_2$ on rented cloud A100 hardware, with the dimer as the project's terminal scientific target and the entry point to the planetary-ices motivation. None of the later phases requires a redesign of the core abstractions developed here, and no stage of the planned project requires HPC-cluster compute allocation.
 
 ---
 
 ## Acknowledgements
 
-Project scaffolded with the `uv` Python project manager. Computations executed on commodity CPU hardware; GPU execution supported via `jax[cuda12]` wheels.
+Project scaffolded with the `uv` Python project manager. Phase 1 computations executed on commodity CPU hardware; Phase 5 production on a single consumer GPU (RTX 5070, Blackwell); Phase 6 production anticipated on a rented cloud A100 80 GB. GPU execution supported via `jax[cuda12]` wheels, with no source changes between CPU, consumer-GPU, and datacenter-GPU backends.
 
 ---
 
