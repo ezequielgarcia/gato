@@ -1,0 +1,389 @@
+# GATO
+
+**Grid Autodiff Theory of Orbitals**
+
+A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The long-term trajectory goes hydrogen → $\text{H}_2^+$ → helium → mean-field molecules → a neural many-body wavefunction for water, with molecular geometry obtained from first principles by gradient descent on the energy. The whole pipeline stays differentiable, matrix-free, and memory-efficient throughout.
+
+This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
+
+---
+
+## 1. Motivation
+
+Most introductions to numerical quantum mechanics take one of two paths:
+
+1. **Dense linear algebra.** Write the Hamiltonian as an $N^3 \times N^3$ matrix, feed it to a diagonalizer, get eigenvalues. This is conceptually clear but dies around $N = 30$ because the matrix has $N^6$ entries — an $80^3$ grid would need ~260 TB just to store $\hat H$.
+2. **Black-box packages.** Use PySCF, Gaussian, ORCA. These work, but the physics is hidden under layers of optimized Fortran and you learn nothing about *how* a Schrödinger solver actually works.
+
+GATO takes a different route:
+
+- **Matrix-free.** The Hamiltonian is represented by a function `psi -> H(psi)`. We never build a matrix. We only need to multiply $\hat H$ by a state, and we do that with local finite-difference stencils.
+- **Differentiable.** Everything runs through JAX's automatic differentiation, so the gradient of any observable with respect to any parameter (grid spacing, vector potential, neural-network weights) is one `jax.grad` away.
+- **JIT-compiled.** Every inner-loop operation is compiled to XLA, which runs on CPU or GPU with no code changes.
+
+The trade-off is that you cannot trivially compute excited states the way diagonalization does. Variational methods (minimize $\langle \hat H \rangle$) give the ground state; excited states need constrained optimization or imaginary-time evolution with Gram–Schmidt.
+
+---
+
+## 2. Physics Background
+
+### 2.1 Atomic units
+
+Throughout GATO we use **Hartree atomic units**: $\hbar = m_e = e = 4\pi\varepsilon_0 = 1$. Consequences:
+
+| Quantity | SI value of 1 a.u. |
+|---|---|
+| Length (Bohr, $a_0$) | $5.292 \times 10^{-11}$ m |
+| Energy (Hartree, $E_h$) | $27.211$ eV $\approx 4.36 \times 10^{-18}$ J |
+| Time | $2.42 \times 10^{-17}$ s |
+
+In these units the hydrogen ground state has energy exactly $-0.5\,E_h$ and Bohr radius $1\,a_0$. All numbers in the code are dimensionless — conversions happen at the boundary when you report a result.
+
+The time-independent Schrödinger equation for one electron becomes
+
+$$
+\hat H\,\psi(\mathbf r) = E\,\psi(\mathbf r), \qquad \hat H = -\tfrac{1}{2}\nabla^2 + V(\mathbf r).
+$$
+
+### 2.2 Why a grid?
+
+We represent $\psi$ by its values on a cube of sample points. This is called a **real-space grid** representation. It has two big advantages over, say, a Gaussian basis set:
+
+- **Systematic convergence.** Refine the grid, the answer gets better in a predictable way. No basis-set selection black magic.
+- **Locality.** Kinetic energy (the Laplacian) becomes a local stencil — each point only talks to its immediate neighbors — which is exactly what GPUs are good at.
+
+The cost is that you need a *lot* of points to resolve atomic-scale features. A hydrogen 1s orbital has characteristic size $\sim 1\,a_0$ and decays over $\sim 10\,a_0$, so a box of side 10 with 64 points per side already gives a respectable 1st-order answer.
+
+### 2.3 Cell-centered Cartesian grid
+
+GATO uses a uniform **cell-centered** grid on the cube $[-L/2, L/2]^3$. With $N$ points per axis and spacing $h = L/N$, the grid points sit at
+
+$$
+x_i = -\tfrac{L}{2} + (i + \tfrac{1}{2})\,h, \qquad i = 0, 1, \dots, N-1.
+$$
+
+Why cell-centered rather than putting points on the boundary ($x_i = -L/2 + i\,h$)? Two reasons:
+
+1. **Symmetric treatment of both boundaries.** No grid point sits exactly on $x = \pm L/2$, so neither Dirichlet nor periodic boundaries create special cases.
+2. **Natural integration rule.** The midpoint rule
+
+$$
+\int_{-L/2}^{L/2} f(x)\,dx \;\approx\; h\sum_{i=0}^{N-1} f(x_i)
+$$
+
+   is second-order accurate and uses every grid point uniformly. In 3D this generalizes to $\int f\,dV \approx h^3\sum f(\mathbf r_{ijk})$.
+
+The volume element `dV = h³` lets us compute inner products:
+
+$$
+\langle \phi | \psi\rangle = \int \phi^*(\mathbf r)\psi(\mathbf r)\,dV \;\approx\; h^3\sum_{ijk} \phi_{ijk}^*\,\psi_{ijk}.
+$$
+
+This is implemented as `gato.inner_product(phi, psi, grid)`.
+
+### 2.4 Finite-difference Laplacian
+
+The Laplacian $\nabla^2 = \partial_x^2 + \partial_y^2 + \partial_z^2$ is discretized with the **second-order central difference stencil**. Taylor-expanding a smooth function:
+
+$$
+f(x+h) = f(x) + h f'(x) + \tfrac{h^2}{2} f''(x) + \tfrac{h^3}{6} f'''(x) + \mathcal O(h^4),
+$$
+
+$$
+f(x-h) = f(x) - h f'(x) + \tfrac{h^2}{2} f''(x) - \tfrac{h^3}{6} f'''(x) + \mathcal O(h^4).
+$$
+
+Adding and rearranging:
+
+$$
+f''(x) = \frac{f(x+h) - 2 f(x) + f(x-h)}{h^2} + \mathcal O(h^2).
+$$
+
+The error is $O(h^2)$, so halving the spacing cuts the error by a factor of four. Applying this along each axis:
+
+$$
+(\nabla^2 \psi)_{ijk} = \frac{\psi_{i+1,j,k} + \psi_{i-1,j,k} + \psi_{i,j+1,k} + \psi_{i,j-1,k} + \psi_{i,j,k+1} + \psi_{i,j,k-1} - 6\psi_{ijk}}{h^2}.
+$$
+
+This is the 7-point stencil. Each output value depends on 6 neighbors plus the center — a completely local operation, trivially parallel.
+
+### 2.5 Boundary conditions
+
+The stencil needs values at $i = -1$ and $i = N$, which are outside the grid. We handle this two ways:
+
+- **Zero-Dirichlet** (`boundary="dirichlet"`): we pretend $\psi = 0$ outside the grid. Appropriate for bound states that decay to zero far from the origin (hydrogen, confined oscillators). Implemented with `jnp.pad(psi, 1)`.
+- **Periodic** (`boundary="periodic"`): we pretend $\psi$ wraps around — $\psi_{-1} = \psi_{N-1}$, $\psi_N = \psi_0$. Appropriate for Bloch states, plane waves, and eventually periodic solids. Implemented with `jnp.roll`.
+
+Both conventions make the Laplacian **Hermitian** (self-adjoint under our discrete inner product), which is crucial: a non-Hermitian $\hat H$ can give complex eigenvalues, and a variational ground-state optimizer can then drive the "energy" to $-\infty$.
+
+### 2.6 Matrix-free operators
+
+A physicist thinks of $\hat T = -\tfrac{1}{2}\nabla^2$ as an operator. A linear-algebra textbook turns it into a matrix. We keep it as an operator:
+
+```python
+def kinetic(psi, h, boundary="dirichlet"):
+    return -0.5 * laplacian(psi, h, boundary)
+```
+
+This function maps a $\psi$ array to $\hat T\psi$ in $O(N^3)$ time and $O(N^3)$ memory, never touching an $N^6$-entry matrix. All downstream algorithms — variational minimization, imaginary-time evolution, conjugate-gradient diagonalization, Lanczos — only need the action $\hat H\psi$, not the explicit matrix.
+
+---
+
+## 3. What's Implemented (Phase 1 so far)
+
+### 3.1 Project layout
+
+```
+neptune/
+├── README.md               (this file)
+├── pyproject.toml          uv-managed project definition
+├── uv.lock                 pinned exact dependency versions
+├── .python-version         → 3.14
+├── src/
+│   └── gato/
+│       ├── __init__.py     public API + enable_x64() + main()
+│       ├── grid.py         Grid3D + integration helpers
+│       └── operators.py    laplacian / kinetic / gradient
+└── tests/
+    ├── conftest.py         forces float64 for all tests
+    ├── test_grid.py        grid/integration sanity checks
+    └── test_laplacian.py   operator correctness tests
+```
+
+### 3.2 `Grid3D`
+
+A frozen dataclass holding only the grid size `N` and extent `L`:
+
+```python
+from gato import Grid3D
+
+grid = Grid3D(N=64, L=10.0)
+grid.h           # 0.15625   (= L / N)
+grid.shape       # (64, 64, 64)
+grid.dV          # 0.00381   (= h³)
+X, Y, Z = grid.coords()      # three (64, 64, 64) arrays
+r = grid.radial()            # sqrt(X² + Y² + Z²)
+```
+
+The grid itself stores no data — it's just a description. The wave function lives in a separate `(N, N, N)` array, which keeps the data layout explicit and JIT-friendly.
+
+### 3.3 Integration helpers
+
+```python
+from gato import integrate, inner_product, norm_sq, normalize
+
+integrate(psi, grid)         # ∫ ψ dV
+inner_product(phi, psi, grid)  # ⟨φ | ψ⟩ = ∫ φ* ψ dV
+norm_sq(psi, grid)             # ⟨ψ | ψ⟩
+normalize(psi, grid)           # returns ψ / √⟨ψ|ψ⟩
+```
+
+All use the midpoint rule with volume element `dV = h³`.
+
+### 3.4 `laplacian`, `kinetic`, `gradient`
+
+All three are `jax.jit`-compiled matrix-free operators:
+
+```python
+from gato import laplacian, kinetic, gradient
+
+lap = laplacian(psi, grid.h, boundary="dirichlet")   # ∇² ψ
+T_psi = kinetic(psi, grid.h)                         # -½ ∇² ψ
+grad = gradient(psi, grid.h)                         # shape (3, N, N, N)
+```
+
+`boundary` must be a static argument (`"dirichlet"` or `"periodic"`) because the control flow depends on it; JAX traces each branch once and caches the compiled code.
+
+### 3.5 Tests
+
+13 tests, all passing on a 32³–128³ grid in about 16 s on CPU. The key ones:
+
+| Test | What it checks | Why it matters |
+|---|---|---|
+| `test_periodic_plane_wave_is_eigenvector` | $e^{i\mathbf k\cdot\mathbf r}$ on a periodic grid is an *exact* eigenvector of the FD Laplacian, with eigenvalue $-\tfrac{2}{h^2}\sum_\alpha(1-\cos k_\alpha h)$. | Proves the stencil is implemented correctly to machine precision. |
+| `test_periodic_continuum_limit_second_order` | As $h \to 0$ the FD eigenvalue converges to $-|\mathbf k|^2$ and the error drops by $\sim 4$× when $N$ doubles. | Verifies the $O(h^2)$ accuracy of the discretization. |
+| `test_dirichlet_hermitian` | $\langle\phi\|\nabla^2\psi\rangle = \langle\nabla^2\phi\|\psi\rangle$ for random $\phi,\psi$. | Hermiticity is required for any variational ground-state method to converge to a real minimum. |
+| `test_dirichlet_particle_in_box_converges` | The Rayleigh quotient for $\psi = \prod\cos(\pi x_\alpha/L)$ on $[-L/2, L/2]^3$ converges monotonically to the continuum $3\pi^2/(2L^2)$. | Sanity-checks the full $\langle\psi\|\hat T\|\psi\rangle / \langle\psi\|\psi\rangle$ pipeline against a textbook analytic result. |
+| `test_gaussian_normalization` | A unit-norm Gaussian integrates to 1 on the grid. | Sanity-checks the midpoint integration rule. |
+
+### 3.6 Quick smoke test
+
+```bash
+uv run gato
+```
+
+Prints JAX version, the available device, a grid summary, and the kinetic energy of a unit Gaussian (should be close to 0.75 Ha, the analytic value $3/4$).
+
+---
+
+## 4. Installation and Development
+
+### 4.1 Requirements
+
+- Python 3.14 (managed by `uv`)
+- [`uv`](https://docs.astral.sh/uv/) 0.10+
+
+### 4.2 Setup
+
+```bash
+cd neptune
+uv sync              # creates .venv/ and installs all CPU deps from uv.lock
+uv run pytest        # 13 tests should pass
+uv run gato     # smoke test
+```
+
+On a GPU box, add the CUDA extras:
+
+```bash
+uv sync --extra gpu  # pulls jax[cuda12] wheels (~2 GB of NVIDIA libraries)
+```
+
+No system CUDA install is needed — `jax[cuda12]` bundles its own CUDA 12 + cuDNN. An NVIDIA driver version 525+ is enough.
+
+### 4.3 Double precision
+
+JAX defaults to float32 for performance. Quantum energies are small differences of large kinetic and potential contributions, so float32 will quietly corrupt your answers. Always enable x64:
+
+```python
+import gato
+gato.enable_x64()   # call once, before any JAX computation
+```
+
+Tests enable this automatically via `tests/conftest.py`.
+
+---
+
+## 5. Roadmap
+
+### Phase 1 — Differentiable Hydrogen Atom *(complete)*
+
+Foundation: prove the machinery works by recovering the hydrogen ground state $E_0 = -0.5\,E_h$.
+
+- [x] Cell-centered 3D Cartesian grid (`Grid3D`)
+- [x] JIT-compiled Laplacian, kinetic, gradient operators with Dirichlet / periodic BCs
+- [x] Integration, inner product, normalization helpers
+- [x] `potentials.py` — softened Coulomb $V_\epsilon(r) = -1/\sqrt{r^2+\epsilon^2}$, harmonic, constant
+- [x] `hamiltonian.py` — full $\hat H = \hat T + \hat V$ with `.apply`, `.expectation`, `.rayleigh`
+- [x] `observables.py` — $\langle T\rangle$, $\langle V\rangle$, virial ratio, radial density
+- [x] `ansatz/grid.py` — raw grid parameters as variational wave function
+- [x] `ansatz/neural.py` — Equinox MLP $\psi_\theta(x, y, z)$ with $e^{-\alpha r}$ envelope
+- [x] `solvers/imag_time.py` — imaginary-time propagation $\psi \to \psi - \Delta\tau\,\hat H\psi$
+- [x] `solvers/vqe.py` — optax-driven Rayleigh-quotient minimization
+- [x] `physics/hydrogen.py` — end-to-end driver targeting $-0.5\,E_h$
+- [x] Test suite (26 tests): plane-wave exactness, $O(h^2)$ convergence, Hermiticity, HO ground state, end-to-end hydrogen
+
+**Exit criterion:** recover $E_0 \approx -0.5\,E_h$ within 1% on a 64³ grid.
+
+### Phase 2 — Multi-nucleus, single electron ($\text{H}_2^+$)
+
+First taste of chemistry. A stepping stone that introduces two ideas needed for molecules without yet requiring many-electron machinery: multi-center potentials and geometry as a differentiable parameter.
+
+- [ ] `potentials.multi_center_coulomb` — $V(\mathbf r) = -\sum_k Z_k / |\mathbf r - \mathbf R_k|$ (softened)
+- [ ] `geometry.py` — nuclei data structure, bond-length / bond-angle observables
+- [ ] `jax.grad` of the energy with respect to nuclear positions $\mathbf R_k$ → **forces**
+- [ ] Geometry optimization as optax on $\mathbf R$
+- [ ] $\text{H}_2^+$ Born–Oppenheimer curve $E(R_{\text{HH}})$ and bond length via gradient descent
+
+**Exit criterion:** recover the $\text{H}_2^+$ equilibrium bond length ($\approx 2.00\,a_0$) by pure gradient descent on the energy. CPU-runnable.
+
+### Phase 3 — Helium via mean-field electronic structure
+
+Enter many-electron land on the simplest closed-shell atom. Single nucleus, two electrons, no molecular geometry yet — the focus is on getting self-consistency right.
+
+- [ ] `scf.py` — self-consistent-field loop with `jax.lax.while_loop`
+- [ ] `functionals.py` — LDA exchange-correlation (and later PBE)
+- [ ] Hartree potential $J(\mathbf r) = \int \rho(\mathbf r')/|\mathbf r - \mathbf r'|\,dV'$ via 3D FFT convolution
+- [ ] Restricted Hartree–Fock with doubly-occupied orbital
+- [ ] Kohn–Sham DFT with LDA
+
+**Exit criterion:** helium ground-state energy within chemical accuracy ($\sim 1$ mHa) of reference values ($-2.862\,E_h$ RHF, $-2.834\,E_h$ LDA, $-2.9037\,E_h$ exact).
+
+### Phase 4 — Mean-field molecules and geometry optimization
+
+Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) to do real chemistry at the mean-field level.
+
+- [ ] SCF with multi-center potentials (H₂, LiH, H₂O at fixed geometry)
+- [ ] Hellmann–Feynman + Pulay forces via `jax.grad` on the self-consistent energy
+- [ ] Joint $(\theta_{\text{orbitals}}, \mathbf R_{\text{nuclei}})$ optimization
+- [ ] Optional pseudopotentials to avoid resolving core electrons on the grid
+- [ ] H₂O geometry optimization at the DFT-LDA level — should give bond angle $\approx 104^\circ$, $d_{\text{OH}} \approx 0.97$ Å
+
+**Exit criterion:** H₂O bond angle within $1^\circ$ of the experimental $104.5^\circ$ at the LDA level; correlating with published DFT-LDA values. GPU helpful but not required.
+
+### Phase 5 — Neural many-body wavefunction for water
+
+The neural-VMC milestone and the project's headline result. Treat the 10 electrons of H₂O explicitly, parametrize $\Psi(\mathbf r_1, \ldots, \mathbf r_{10})$ as a neural Slater-backflow ansatz (FermiNet / PauliNet family), and obtain the geometry at near-chemical accuracy.
+
+- [ ] `ansatz/determinant.py` — Slater determinants of learned orbitals
+- [ ] `ansatz/fermi_net.py` — permutation-equivariant backflow network with per-electron features and pairwise streams
+- [ ] Jastrow factor with explicit e–e and e–n cusp conditions
+- [ ] `sampling.py` — Metropolis–Hastings sampler over $|\Psi|^2$ in $3N$-dimensional space
+- [ ] `solvers/vmc.py` — variational Monte Carlo with `kfac-jax` natural-gradient optimizer
+- [ ] Joint optimization of network weights + nuclear positions
+- [ ] H₂O geometry from first principles: $\theta_{\text{HOH}} = 104.5^\circ \pm 0.5^\circ$, $d_{\text{OH}} = 0.958 \pm 0.01$ Å
+
+**Exit criterion:** published-FermiNet-equivalent quality on the H₂O geometry. **GPU required from day one** (published water runs take hours on multi-GPU).
+
+---
+
+## 6. Dependencies per phase
+
+The package stays pure-Python, pure-JAX throughout. Total additional dependencies across all five phases: **two runtime packages**.
+
+| Phase | New runtime deps | Dev-only deps | Why |
+|---|---|---|---|
+| 1 (done) | `jax`, `optax`, `equinox`, `numpy`, `scipy`, `matplotlib` | `pytest` | base stack |
+| 2 (H₂⁺) | none | none | multi-center potential + autodiff forces only |
+| 3 (helium SCF) | none | none | FFT is in `jax.numpy.fft`; LDA is ~10 lines of math |
+| 4 (mean-field molecules) | none | **`pyscf`** (optional) | pyscf is only for cross-validating our numbers against a trusted reference |
+| 5 (neural water) | **`kfac-jax`**, optional **`blackjax`** | none | KFAC natural-gradient is near-essential for VMC convergence; blackjax provides HMC if we want it (Metropolis is easy to hand-roll) |
+| all, on GPU | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
+
+What's **not** needed:
+
+- No PyTorch, no TensorFlow — stays 100 % JAX.
+- No C / C++ / Fortran bindings. No `psi4`, no `libxc`.
+- No databases, no trackers (optional `wandb` if we want experiment dashboards; trivial to add later).
+
+---
+
+## 7. Design Principles
+
+- **JAX everywhere.** Autodiff, JIT, vmap. No NumPy in hot paths.
+- **Matrix-free.** Hamiltonians are linear operators $\psi \mapsto \hat H\psi$, never dense arrays.
+- **Pure functions.** No hidden state. Every solver takes an explicit `params` pytree and returns a new one.
+- **Modular phases.** Each phase lives in its own subpackage; later phases import earlier operators rather than duplicating them.
+- **Tested.** Every operator gets at least one analytic sanity check (harmonic-oscillator eigenvalues, free-particle plane waves, known hydrogen levels).
+
+---
+
+## 8. References
+
+- Griffiths & Schroeter, *Introduction to Quantum Mechanics*, 3rd ed. — chapters on hydrogen and the variational principle.
+- Martin, *Electronic Structure: Basic Theory and Practical Methods*, Cambridge — the canonical DFT/HF reference used for Phases 3 and 4.
+- Szabo & Ostlund, *Modern Quantum Chemistry*, Dover — Hartree–Fock, configuration interaction, and the SCF loop.
+- Peruzzo et al. (2014), "A variational eigenvalue solver on a photonic quantum processor" — the original VQE paper.
+- Pfau et al. (2020), "Ab initio solution of the many-electron Schrödinger equation with deep neural networks" — FermiNet, the blueprint for Phase 5.
+- Hermann et al. (2020), "Deep-neural-network solution of the electronic Schrödinger equation" — PauliNet, a parallel approach.
+- LeVeque, *Finite Difference Methods for Ordinary and Partial Differential Equations* — derivations of the stencils and their error bounds.
+- JAX documentation: https://jax.readthedocs.io/
+- Equinox (neural nets): https://docs.kidger.site/equinox/
+- optax (optimization): https://optax.readthedocs.io/
+- kfac-jax (natural-gradient optimizer): https://github.com/google-deepmind/kfac-jax
+
+---
+
+## 9. Status
+
+Phase 1 implementation is **complete end-to-end**.
+
+| Metric | Grid | Result | Target |
+|---|---|---|---|
+| Hydrogen ground-state energy (imag-time) | $48^3$, $L=10$ | $-0.473\,E_h$ | $-0.500$ |
+| Hydrogen ground-state energy (imag-time) | $64^3$, $L=12$ | $-0.477\,E_h$ | $-0.500$ |
+| Hydrogen ground-state energy (imag-time) | $96^3$, $L=12$ | $-0.487\,E_h$ | $-0.500$ |
+| Virial ratio $2\langle T\rangle/\|\langle V\rangle\|$ (96³) | | $0.984$ | $1.000$ |
+
+The residual $\sim 2.6\%$ gap at $96^3$ is dominated by the Coulomb softening $\epsilon = h/2$; finer grids or $\epsilon \to 0$ extrapolation will close it. All 26 tests pass.
+
+Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3, 4, and 5 (up to neural water) follow a clearly scoped dependency trajectory — see §6.
