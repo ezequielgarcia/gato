@@ -13,10 +13,10 @@ from .operators import kinetic
 
 
 def kinetic_energy(
-    psi: jax.Array, grid: Grid3D, boundary: str = "dirichlet"
+    psi: jax.Array, grid: Grid3D, boundary: str = "dirichlet", order: int = 2,
 ) -> jax.Array:
     """⟨T̂⟩ = ⟨ψ|(-½ ∇²)|ψ⟩ / ⟨ψ|ψ⟩."""
-    T_psi = kinetic(psi, grid.h, boundary)
+    T_psi = kinetic(psi, grid.h, boundary, order)
     return inner_product(psi, T_psi, grid).real / norm_sq(psi, grid).real
 
 
@@ -27,7 +27,8 @@ def potential_energy(psi: jax.Array, V: jax.Array, grid: Grid3D) -> jax.Array:
 
 
 def virial_ratio(
-    psi: jax.Array, V: jax.Array, grid: Grid3D, boundary: str = "dirichlet"
+    psi: jax.Array, V: jax.Array, grid: Grid3D,
+    boundary: str = "dirichlet", order: int = 2,
 ) -> jax.Array:
     """Return 2⟨T⟩ / |⟨V⟩|.
 
@@ -35,7 +36,7 @@ def virial_ratio(
     i.e., this ratio is +1.0 (because ⟨V⟩ < 0 for Coulomb). Deviations
     measure how non-eigenstate the trial ψ is.
     """
-    T = kinetic_energy(psi, grid, boundary)
+    T = kinetic_energy(psi, grid, boundary, order)
     Vv = potential_energy(psi, V, grid)
     return 2 * T / jnp.abs(Vv)
 

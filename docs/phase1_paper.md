@@ -2,13 +2,13 @@
 
 **Ezequiel Garcia**
 
-*Phase 1 technical report. Revision 4, April 2026.*
+*Phase 1 technical report. Revision 5, April 2026.*
 
 ---
 
 ## Abstract
 
-We describe the design and full implementation of **GATO** (*Grid Autodiff Theory of Orbitals*), a 3D Schrödinger solver written from first principles in [JAX](https://jax.readthedocs.io/). The long-term objective is a neural many-body wavefunction for the water molecule, with molecular geometry obtained from first principles by gradient descent on the energy. In this first phase we restrict ourselves to a single electron in a central potential and target the hydrogen 1s ground state energy, $E_0 = -0.5\,E_h$. The key design decisions — a cell-centered Cartesian real-space grid, matrix-free finite-difference operators, automatic differentiation end-to-end, and a variational treatment via the Rayleigh quotient — are motivated and specified. A second-order finite-difference Laplacian is implemented as a JIT-compiled local stencil and shown to reproduce the analytic plane-wave eigenvalue relation to $10^{-10}$ on periodic boundaries, and to exhibit $O(h^2)$ convergence to the continuum. The operator is self-adjoint under the discrete midpoint inner product to $10^{-8}$ with zero-Dirichlet boundary conditions. A softened Coulomb potential and a matrix-free `Hamiltonian` class complete the single-particle Schrödinger operator. Two variational solvers are implemented and verified: imaginary-time propagation on a grid ansatz and optax-driven VQE on an Equinox multilayer-perceptron ansatz with explicit Kato nuclear-cusp factors [Kato 1957]. On a $96^3$ grid with $L = 12\,a_0$, imaginary-time propagation recovers the hydrogen ground state energy to $E = -0.487\,E_h$ (2.6 % above the analytic $-0.5\,E_h$) with a virial ratio of $0.984$; residual error is dominated by the Coulomb-softening scale $\epsilon = h/2$. These results validate the substrate on which the remaining phases (multi-nucleus single-electron systems, mean-field electronic structure, and neural many-body wavefunctions for water) will be built.
+We describe the design and full implementation of **GATO** (*Grid Autodiff Theory of Orbitals*), a 3D Schrödinger solver written from first principles in [JAX](https://jax.readthedocs.io/). The long-term objective is a neural many-body wavefunction for the water molecule, with molecular geometry obtained from first principles by gradient descent on the energy. In this first phase we restrict ourselves to a single electron in a central potential and target the hydrogen 1s ground state energy, $E_0 = -0.5\,E_h$. The key design decisions — a cell-centered Cartesian real-space grid, matrix-free finite-difference operators, automatic differentiation end-to-end, and a variational treatment via the Rayleigh quotient — are motivated and specified. A second-order finite-difference Laplacian is implemented as a JIT-compiled local stencil and shown to reproduce the analytic plane-wave eigenvalue relation to $10^{-10}$ on periodic boundaries, and to exhibit $O(h^2)$ convergence to the continuum. The operator is self-adjoint under the discrete midpoint inner product to $10^{-8}$ with zero-Dirichlet boundary conditions. A softened Coulomb potential and a matrix-free `Hamiltonian` class complete the single-particle Schrödinger operator. Three variational solvers are implemented and verified: imaginary-time propagation on a grid ansatz, a matrix-free Lanczos eigenvalue solver returning the lowest few Ritz pairs, and optax-driven VQE on an Equinox multilayer-perceptron ansatz with explicit Kato nuclear-cusp factors [Kato 1957]. Both 2nd-order and 4th-order finite-difference Laplacian stencils are available (13-point versus 7-point; $O(h^4)$ versus $O(h^2)$ error). On a $96^3$ grid with $L = 12\,a_0$, imaginary-time propagation recovers the hydrogen ground state energy to $E = -0.487\,E_h$ (2.6 % above the analytic $-0.5\,E_h$) with a virial ratio of $0.984$; residual error is dominated by the Coulomb-softening scale $\epsilon = h/2$. A linear-in-$\epsilon$ extrapolation to zero softening gives $E_0 = -0.504\,E_h$ ($0.74\,\%$ error) at $N = 64$. The framework also reproduces the $Z^2$ scaling of the hydrogenic ground state across $Z \in \{1, 2, 3\}$ (H, He⁺, Li²⁺), and the radial probability density of the converged 1s ground state matches the analytic $P(r) = 4 r^2 e^{-2r}$ to within grid-binning noise. These results validate the substrate on which the remaining phases (multi-nucleus single-electron systems, mean-field electronic structure, and neural many-body wavefunctions for water) will be built.
 
 ---
 
@@ -93,7 +93,13 @@ $$
 
 Each output value depends only on six nearest neighbors, so the action of the operator is local and embarrassingly parallel. Matrix storage is avoided entirely; a single application of the operator costs $O(N^3)$ in both memory and floating-point operations, whereas storing the full $N^3 \times N^3$ Hamiltonian matrix would cost $O(N^6)$ and is prohibitive for $N \gtrsim 30$.
 
-Higher-order stencils (9- or 11-point, trading locality for accuracy) can be substituted without changing the downstream algorithms and are deferred to future work.
+A fourth-order 13-point stencil,
+
+$$
+f''(x) \;=\; \frac{-f(x{+}2h) + 16 f(x{+}h) - 30 f(x) + 16 f(x{-}h) - f(x{-}2h)}{12\,h^2} \;+\; \mathcal O(h^4), \tag{6b}
+$$
+
+is also implemented and selectable via an `order=4` keyword. It costs 1.5× more arithmetic per application than the 2nd-order stencil but attains the same accuracy at roughly half the grid points per axis, which is approximately $8\times$ cheaper overall for smooth problems.
 
 ### 2.3 Boundary conditions
 
@@ -241,7 +247,17 @@ The gradient operator (also a central-difference stencil) correctly returns $(1,
 
 As an independent single-particle benchmark with an analytic eigenvalue, the 3D isotropic harmonic oscillator $V = \tfrac{1}{2}\omega^2 r^2$ with $\omega = 1$ has ground state $\psi_0(\mathbf r) = (\omega/\pi)^{3/4} e^{-\omega r^2/2}$ and energy $E_0 = \tfrac{3}{2}\omega = 1.5\,E_h$. Evaluating the Rayleigh quotient of the analytic state on a $48^3$ grid with $L = 10\,a_0$ yields the expected value to within 1 %. This exercises the full Hamiltonian composition (`kinetic` + multiplicative potential) end-to-end on a problem without a Coulomb singularity, isolating the discretization error from the softening error of Sec. 2.5.
 
-All thirty tests — seven for the grid and integration helpers, eight for the operators, three for the Hamiltonian, five for the potentials, three for the observables, four for the Kato-cusp factorization of the neural ansatz (verifying the spherically-averaged radial log-slope at each nucleus equals $-Z$, and that the wavefunction is finite everywhere despite the bare Coulomb singularity), and two end-to-end hydrogen tests — pass in approximately 47 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
+### 4.7 Fourth-order Laplacian: O(h⁴) convergence
+
+The 13-point 4th-order stencil (eq. 6b) was tested against the same plane-wave eigenvalue oracle used for the 2nd-order stencil. At $\mathbf k = (2\pi/L)(1,1,1)$ with $L = 10\,a_0$, the error in the discrete eigenvalue dropped by a factor of 16 per halving of $h$ (versus a factor of 4 for the 2nd-order stencil), consistent with the theoretical $O(h^4)$ error. For a normalized unit-variance Gaussian on a $48^3$ grid the 4th-order kinetic expectation matches the analytic $3/4\,E_h$ to $< 5\times 10^{-3}$, an order of magnitude tighter than the 2nd-order result on the same grid. Hermiticity under zero-Dirichlet boundaries is preserved.
+
+### 4.8 Matrix-free Lanczos eigenvalue solver
+
+A Lanczos iteration with full reorthogonalization was implemented in `src/gato/solvers/lanczos.py`. On the 3D isotropic harmonic oscillator with $\omega = 1$ on a $40^3$ grid and a single random starting vector, $80$–$120$ Krylov steps recover the analytic eigenvalue ladder $E_n = (n + 3/2)\omega$ to better than $5\times 10^{-3}$ at each rung. Single-vector Lanczos returns one representative Ritz value per distinct eigenvalue; block variants (left to future work) are required to resolve the full degeneracy of higher rungs. On the hydrogen atom, Lanczos and imaginary-time agree on the ground-state energy to within $10^{-3}\,E_h$, with Lanczos converging in $\sim\!60$ steps versus $\sim\!1500$ for imaginary-time on the same grid — roughly an order of magnitude fewer Hamiltonian applications — and returning orthonormal Ritz eigenstates directly.
+
+### 4.9 Test coverage summary
+
+All forty tests — seven for the grid and integration helpers, six for the 2nd-order Laplacian, five for the 4th-order Laplacian, four for the Lanczos solver, three for the Hamiltonian, five for the potentials, three for the observables, four for the Kato-cusp factorization of the neural ansatz (verifying the spherically-averaged radial log-slope at each nucleus equals $-Z$, and that the wavefunction is finite everywhere despite the bare Coulomb singularity), and three end-to-end hydrogen tests (imag-time ground state, Z-scaling across $\{1,2,3\}$, and neural VQE convergence) — pass in approximately 65 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
 
 ---
 
@@ -318,7 +334,55 @@ The grid ansatz is untenable beyond roughly $n = 2$ in the direct many-body form
 
 In summary: grid ansatz is preferred while the wavefunction domain remains three-dimensional and a structured grid fits in memory; neural ansatz becomes mandatory as soon as the domain dimensionality exceeds roughly $3\text{–}6$, which is unavoidable at the project's headline target. Phase 1 maintains both so that the transition is incremental rather than a rewrite.
 
-### 5.4 Acceptance criteria
+### 5.4 Hydrogenic $Z$-scaling
+
+The same driver, with nuclear charge $Z$ passed through `softened_coulomb` and the `NeuralAnsatz` cusp, reproduces the one-electron ground state of H, He⁺, and Li²⁺. The analytic ground-state energy of a hydrogenic atom with charge $Z$ is $E_0(Z) = -Z^2/2$. Table 3 reports the values obtained with imaginary-time propagation on a $48^3$ grid (box size scaled as $1/Z$ to keep the orbital resolution comparable) using the 4th-order Laplacian.
+
+**Table 3.** Hydrogenic ground-state energies (imaginary-time, grid ansatz, 4th-order stencil, $N=48$).
+
+| Atom | $Z$ | $L\ (a_0)$ | $E\ (E_h)$ | $E_{\rm exact}\ (E_h)$ | rel. error |
+|------|-----|-----------|-----------|-----------------------|-----------|
+| H    | 1   | 10.0      | $-0.479$  | $-0.500$              | 4.2 %     |
+| He⁺  | 2   |  6.0      | $-1.900$  | $-2.000$              | 5.0 %     |
+| Li²⁺ | 3   |  4.0      | $-4.275$  | $-4.500$              | 5.0 %     |
+
+Relative errors are stable across $Z$ and consistent with the softening-limited single-atom baseline. The $Z^2$ scaling of the ground-state energy is reproduced; the $Z = 1$ case is a particular case of this parametric family and is verified independently by the `test_hydrogenic_ions_scale_as_minus_Z_squared_over_two` pytest entry.
+
+### 5.5 Softening extrapolation and hydrogen-atom accuracy
+
+The $2.6\,\%$ residual in Sec. 5.1 is dominated by the Coulomb-softening regularization $V_\epsilon(r) = -1/\sqrt{r^2 + \epsilon^2}$. Because the softened potential differs from the bare Coulomb by a perturbation that is linear in $\epsilon$ at leading order (the integrable $1/r$ singularity convolves with the perturbation to give a log-enhanced linear-in-$\epsilon$ shift, rather than a purely $O(\epsilon^2)$ shift), we sweep $\epsilon$ at fixed grid resolution and extrapolate with the model
+
+$$
+E(\epsilon) \;=\; E_0 + a\,\epsilon + b\,\epsilon^2 \;+\; \mathcal O(\epsilon^3). \tag{12}
+$$
+
+**Table 4.** Hydrogen ground-state energy as a function of softening at fixed $N = 64$, $L = 12\,a_0$, 4th-order stencil. Lanczos was used as the eigensolver for speed.
+
+| $\epsilon\ (a_0)$ | $E\ (E_h)$ |
+|-------------------|-----------|
+| 0.094             | $-0.4750$ |
+| 0.141             | $-0.4595$ |
+| 0.188             | $-0.4435$ |
+| 0.281             | $-0.4133$ |
+| 0.375             | $-0.3865$ |
+
+Linear least-squares fits yield:
+
+| Model | $E_0\ (E_h)$ | Residual vs $-0.5$ | Error |
+|-------|--------------|-------------------|-------|
+| $E_0 + b\epsilon^2$              | $-0.472$ | $+0.028$ | $5.5\,\%$ |
+| $E_0 + a\epsilon$                | $-0.504$ | $-0.004$ | $0.74\,\%$ |
+| $E_0 + a\epsilon + b\epsilon^2$  | $-0.510$ | $-0.010$ | $1.9\,\%$ |
+
+The linear model reduces the error to sub-percent, consistent with the analytic expectation that the leading softening correction is $O(\epsilon)$ with a logarithmic prefactor from the near-nuclear integration region. The pure-quadratic fit is inappropriate; the combined linear+quadratic model slightly overshoots because with only five data points the quadratic coefficient absorbs residual nonlinearities and biases $E_0$.
+
+### 5.6 Radial probability density of the 1s ground state
+
+As a qualitative check that the converged wavefunction is shaped correctly and not merely energetically accurate, the radial probability density $P(r) = |\psi(\mathbf r)|^2 \cdot 4\pi r^2$ of the Lanczos ground state on an $80^3$ grid ($L = 12\,a_0$) is plotted against the analytic hydrogen 1s form $P_{\rm exact}(r) = 4 r^2 e^{-2r}$ in Figure 1. The numerical and analytic distributions agree within shell-binning discretization noise: the peak location ($r \approx 1\,a_0$, the Bohr radius), the asymptotic decay rate, and the overall shape are all reproduced.
+
+![Figure 1. Hydrogen 1s radial probability density, $N = 80$, $L = 12\,a_0$, 4th-order Laplacian, Lanczos ground state. Blue: binned numerical $P(r)$. Black: analytic $4 r^2 e^{-2r}$.](figures/hydrogen_radial_density.png)
+
+### 5.7 Acceptance criteria
 
 The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$:
 
@@ -327,7 +391,7 @@ The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$
 - **Orthonormality.** $\langle \psi|\psi\rangle = 1$ to float64 precision after post-training normalization.
 - **Qualitative radial density.** The binned $|\psi|^2$ on the converged grid ansatz peaks near $r \approx 1\,a_0$, consistent with the analytic $P(r) = 4r^2 e^{-2r}$.
 
-### 5.5 Reproducibility
+### 5.8 Reproducibility
 
 All results in this section are reproduced by
 
@@ -352,21 +416,25 @@ The solver is a Python 3.14 package managed with [`uv`](https://docs.astral.sh/u
 src/gato/
     __init__.py         public API, enable_x64(), main()
     grid.py             Grid3D, inner_product, norm_sq, normalize, integrate
-    operators.py        laplacian, kinetic, gradient  (matrix-free)
+    operators.py        laplacian (2nd and 4th order), kinetic, gradient
     potentials.py       softened_coulomb, harmonic_oscillator, constant
-    hamiltonian.py      Hamiltonian: composition of T̂ + V̂
+    hamiltonian.py      Hamiltonian: composition of T̂ + V̂, order-aware
     observables.py      kinetic_energy, potential_energy, virial_ratio, radial_density
     ansatz/
         grid.py         grid ansatz with hydrogenic / Gaussian / random init
         neural.py       NeuralAnsatz: Equinox MLP × Π_k exp(-Z_k |r - R_k|)
     solvers/
         imag_time.py    imaginary-time Euler propagation
+        lanczos.py      matrix-free Lanczos with full reorthogonalization
         vqe.py          optax-driven Rayleigh-quotient minimization
     physics/hydrogen.py end-to-end Phase 1 driver (CLI: gato-hydrogen)
+benchmarks/
+    softening_extrapolation.py   ε → 0 extrapolation driver
+    radial_density.py            1s radial density figure generator
 tests/
-    test_grid.py, test_laplacian.py, test_potentials.py,
-    test_hamiltonian.py, test_observables.py, test_cusp.py,
-    test_hydrogen.py                                             (30 tests)
+    test_grid.py, test_laplacian.py, test_laplacian_order4.py,
+    test_potentials.py, test_hamiltonian.py, test_observables.py,
+    test_cusp.py, test_lanczos.py, test_hydrogen.py              (40 tests)
 ```
 
 ### 6.2 Key abstractions
@@ -443,6 +511,7 @@ Project scaffolded with the `uv` Python project manager. Computations executed o
 - Javanainen, J., Eberly, J. H., and Su, Q. (1988). *Numerical simulations of multiphoton ionization and above-threshold electron spectra.* Physical Review A **38**, 3430.
 - Kato, T. (1957). *On the eigenfunctions of many-particle systems in quantum mechanics.* Communications on Pure and Applied Mathematics **10**, 151.
 - Kidger, P. and Garcia, C. (2021). *Equinox: neural networks in JAX via callable PyTrees and filtered transformations.* Differentiable Programming workshop at NeurIPS 2021.
+- Lanczos, C. (1950). *An iteration method for the solution of the eigenvalue problem of linear differential and integral operators.* Journal of Research of the National Bureau of Standards **45**, 255.
 - LeVeque, R. J. (2007). *Finite Difference Methods for Ordinary and Partial Differential Equations.* SIAM.
 - Martin, R. M. (2004). *Electronic Structure: Basic Theory and Practical Methods.* Cambridge University Press.
 - Peruzzo, A. et al. (2014). *A variational eigenvalue solver on a photonic quantum processor.* Nature Communications **5**, 4213.

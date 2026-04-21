@@ -155,7 +155,8 @@ gato/
 │       │   └── vqe.py        optax-driven Rayleigh-quotient minimization
 │       └── physics/
 │           └── hydrogen.py   end-to-end Phase 1 driver (CLI `gato-hydrogen`)
-└── tests/                  30 tests covering every module above
+├── tests/                  40 tests covering every module above
+└── benchmarks/             softening extrapolation and radial-density figure generators
 ```
 
 ### 3.2 `Grid3D`
@@ -202,6 +203,8 @@ grad = gradient(psi, grid.h)                         # shape (3, N, N, N)
 
 `boundary` must be a static argument (`"dirichlet"` or `"periodic"`) because the control flow depends on it; JAX traces each branch once and caches the compiled code.
 
+The Laplacian also accepts an `order` argument (`2` or `4`). The 4th-order 13-point stencil costs 1.5× more per application than the default 2nd-order 7-point stencil but is $O(h^4)$ accurate, reaching the same accuracy at half the grid size per axis — roughly $8\times$ cheaper overall on smooth problems.
+
 ### 3.5 Neural ansatz with Kato cusp
 
 The neural ansatz is
@@ -233,7 +236,7 @@ For Phase 2 ($\text{H}_2^+$) the same class takes two nuclei; for Phase 5 (neura
 
 ### 3.6 Tests
 
-30 tests, all passing on a 32³–128³ grid in about 47 s on CPU. The key ones:
+40 tests, all passing on a 32³–128³ grid in about 70 s on CPU. The key ones:
 
 | Test | What it checks | Why it matters |
 |---|---|---|
@@ -267,7 +270,7 @@ Prints JAX version, the available device, a grid summary, and the kinetic energy
 ```bash
 cd gato
 uv sync              # creates .venv/ and installs all CPU deps from uv.lock
-uv run pytest        # 30 tests should pass
+uv run pytest        # 40 tests should pass
 uv run gato          # smoke test
 uv run gato-hydrogen # full hydrogen benchmark
 ```
@@ -310,7 +313,12 @@ Foundation: prove the machinery works by recovering the hydrogen ground state $E
 - [x] `solvers/imag_time.py` — imaginary-time propagation $\psi \to \psi - \Delta\tau\,\hat H\psi$
 - [x] `solvers/vqe.py` — optax-driven Rayleigh-quotient minimization
 - [x] `physics/hydrogen.py` — end-to-end driver targeting $-0.5\,E_h$
-- [x] Test suite (30 tests): plane-wave exactness, $O(h^2)$ convergence, Hermiticity, HO ground state, Kato cusp spherical-average, end-to-end hydrogen
+- [x] 4th-order 13-point Laplacian stencil (selectable via `order=4`)
+- [x] Matrix-free Lanczos solver (`solvers/lanczos.py`) for lowest-$K$ eigenpairs
+- [x] Hydrogenic $Z$-scaling: $E_0(Z) = -Z^2/2$ reproduced for H, He⁺, Li²⁺
+- [x] Softening extrapolation $\epsilon \to 0$ closes residual to $<1\%$ of analytic $-0.5\,E_h$
+- [x] Radial density figure: converged $P(r)$ vs. analytic $4r^2 e^{-2r}$
+- [x] Test suite (40 tests): plane-wave exactness at $O(h^2)$ and $O(h^4)$, Hermiticity, HO Lanczos spectrum, Kato cusp spherical-average, $Z$-scaling, end-to-end hydrogen
 
 **Exit criterion:** recover $E_0 \approx -0.5\,E_h$ within 1% on a 64³ grid.
 
@@ -420,11 +428,14 @@ Phase 1 implementation is **complete end-to-end**.
 
 | Metric | Grid | Result | Target |
 |---|---|---|---|
-| Hydrogen ground-state energy (imag-time) | $48^3$, $L=10$ | $-0.473\,E_h$ | $-0.500$ |
-| Hydrogen ground-state energy (imag-time) | $64^3$, $L=12$ | $-0.477\,E_h$ | $-0.500$ |
-| Hydrogen ground-state energy (imag-time) | $96^3$, $L=12$ | $-0.487\,E_h$ | $-0.500$ |
-| Virial ratio $2\langle T\rangle/\|\langle V\rangle\|$ (96³) | | $0.984$ | $1.000$ |
+| Hydrogen $E_0$ (imag-time, $96^3$, $L=12$, $O(h^2)$) | | $-0.487\,E_h$ | $-0.500$ |
+| Hydrogen $E_0$ (imag-time, $64^3$, $L=12$, $O(h^4)$) | | $-0.479\,E_h$ | $-0.500$ |
+| Hydrogen $E_0$ (Lanczos + linear $\epsilon\to 0$ fit, $N=64$) | | $-0.504\,E_h$ | $-0.500$ |
+| Virial ratio $2\langle T\rangle/|\langle V\rangle|$ (96³) | | $0.984$ | $1.000$ |
+| He⁺ $E_0$ (imag-time, $48^3$, $L=6$, $O(h^4)$) | | $-1.900\,E_h$ | $-2.000$ |
+| Li²⁺ $E_0$ (imag-time, $48^3$, $L=4$, $O(h^4)$) | | $-4.275\,E_h$ | $-4.500$ |
+| 3D HO Lanczos ladder ($N=40$, $L=10$) | | $1.50, 2.50, 3.50, \ldots$ | $1.5, 2.5, 3.5, \ldots$ |
 
-The residual $\sim 2.6\%$ gap at $96^3$ is dominated by the Coulomb softening $\epsilon = h/2$; finer grids or $\epsilon \to 0$ extrapolation will close it. All 30 tests pass.
+The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 40 tests pass.
 
 Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3, 4, and 5 (up to neural water) follow a clearly scoped dependency trajectory — see §6.

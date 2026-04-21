@@ -21,6 +21,30 @@ def test_hydrogen_imag_time_converges():
 
 
 @pytest.mark.slow
+def test_hydrogenic_ions_scale_as_minus_Z_squared_over_two():
+    """For a one-electron atom with nuclear charge Z, E₀ = -Z²/2. Test the
+    scaling across Z ∈ {1, 2, 3}. Each run uses a box shrunk proportionally
+    to the orbital size (~1/Z) to keep the relative grid resolution comparable.
+    """
+    configs = [
+        (1.0, 10.0),  # H
+        (2.0,  6.0),  # He+
+        (3.0,  4.0),  # Li2+
+    ]
+    for Z, L in configs:
+        res = solve_hydrogen(
+            N=48, L=L, Z=Z, solver="imag_time",
+            n_steps=1500, order=4, verbose=False,
+        )
+        expected = -0.5 * Z * Z
+        # softening-limited; accept within 8% for a quick test
+        rel = abs((res.energy - expected) / expected)
+        assert rel < 0.08, f"Z={Z}: E = {res.energy:.4f}, expected {expected:.4f}"
+        # virial should be close to unity
+        assert abs(res.virial_ratio - 1.0) < 0.08
+
+
+@pytest.mark.slow
 def test_hydrogen_vqe_neural_improves_from_random_init():
     """Neural VQE should drop below a random-init baseline.
 

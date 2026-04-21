@@ -16,6 +16,7 @@ def init_grid_ansatz(
     grid: Grid3D,
     key: jax.Array,
     init: str = "hydrogenic",
+    Z: float = 1.0,
     noise: float = 0.0,
 ) -> jax.Array:
     """Initialize the grid parameters.
@@ -23,14 +24,15 @@ def init_grid_ansatz(
     Parameters
     ----------
     init :
-        "hydrogenic"  -- ψ₀ = exp(-r), close to the hydrogen 1s ground state.
+        "hydrogenic"  -- ψ₀ = exp(-Z r), the exact hydrogen-like 1s shape.
         "gaussian"    -- ψ₀ = exp(-r²/2).
         "random"      -- unit-normal noise (for debugging).
+    Z : nuclear charge (only used for init="hydrogenic").
     noise : additive Gaussian perturbation scale on top of the analytic guess.
     """
     if init == "hydrogenic":
         r = grid.radial(softening=grid.h / 2)
-        psi = jnp.exp(-r)
+        psi = jnp.exp(-Z * r)
     elif init == "gaussian":
         r = grid.radial()
         psi = jnp.exp(-r * r / 2)

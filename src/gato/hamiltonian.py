@@ -20,10 +20,11 @@ class Hamiltonian:
     grid: Grid3D
     V: jax.Array
     boundary: str = "dirichlet"
+    order: int = 2  # finite-difference order of the kinetic stencil (2 or 4)
 
     def apply(self, psi: jax.Array) -> jax.Array:
         """Return H ψ = (-½ ∇² + V) ψ."""
-        return kinetic(psi, self.grid.h, self.boundary) + self.V * psi
+        return kinetic(psi, self.grid.h, self.boundary, self.order) + self.V * psi
 
     def expectation(self, psi: jax.Array) -> jax.Array:
         """⟨ψ|H|ψ⟩ (not normalized). Real for Hermitian H."""
