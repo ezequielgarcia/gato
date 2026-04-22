@@ -12,10 +12,10 @@ Phase 2 is framed as a capability milestone rather than a major work phase. It i
 
 ## 2. Multi-center potential
 
-With $K$ nuclei at positions $\{\mathbf R_k\}$ carrying charges $\{Z_k\}$, the softened nuclear potential is
+With $K$ nuclei at positions $\lbrace \mathbf R_k\rbrace $ carrying charges $\lbrace Z_k\rbrace $, the softened nuclear potential is
 
 $$
-V(\mathbf r; \{\mathbf R_k\}) \;=\; -\sum_{k=1}^{K} \frac{Z_k}{\sqrt{|\mathbf r - \mathbf R_k|^2 + \varepsilon^2}}. \tag{1}
+V(\mathbf r; \lbrace \mathbf R_k\rbrace ) \;=\; -\sum_{k=1}^{K} \frac{Z_k}{\sqrt{|\mathbf r - \mathbf R_k|^2 + \varepsilon^2}}. \tag{1}
 $$
 
 The implementation in `src/gato/potentials.py::multi_center_softened_coulomb` is a `jax.vmap` over the nuclei, built on the single-center form already in Phase 1. Setting $K=1$ reduces to the Phase 1 potential by construction (`tests/test_multicenter_potential.py::test_reduces_to_single_center_when_K_equals_1`). Linearity in $Z$ is verified (`test_charge_scaling`), as is superposition of single-center contributions (`test_two_centers_superposition`). Translation of the nuclei by a vector $\mathbf t$ translates $V$ by the same vector up to a grid-resolution artifact: exact equality holds on a cell-centered grid only for shifts commensurate with the spacing $h$.
@@ -35,14 +35,14 @@ which JAX treats automatically as a pytree with leaves (positions, charges). For
 The geometry module additionally exposes `bond_length`, `bond_angle`, the classical nuclear-repulsion energy
 
 $$
-E_{\rm nn}(\{\mathbf R_k\}) \;=\; \sum_{i<j} \frac{Z_i Z_j}{|\mathbf R_i - \mathbf R_j|}, \tag{2}
+E_{\rm nn}(\lbrace \mathbf R_k\rbrace ) \;=\; \sum_{i<j} \frac{Z_i Z_j}{|\mathbf R_i - \mathbf R_j|}, \tag{2}
 $$
 
 and a charge-weighted centroid / recentre utility. A consistency test (`test_forces_from_nuclear_repulsion_match_analytic`) verifies that `jax.grad` on $E_{\rm nn}$ for two unit charges on the $z$-axis at $\pm R/2$ returns exactly the analytic Coulomb force $\pm 1/R^2 \hat{\mathbf z}$.
 
 ## 4. Born–Oppenheimer energy and Hellmann–Feynman forces
 
-The electronic energy at fixed nuclear geometry is obtained variationally: the Phase 1 imaginary-time solver is applied to $\hat H(\{\mathbf R_k\}) = \hat T + V(\,\cdot\,;\{\mathbf R_k\})$ with the LCAO initial guess
+The electronic energy at fixed nuclear geometry is obtained variationally: the Phase 1 imaginary-time solver is applied to $\hat H(\lbrace \mathbf R_k\rbrace ) = \hat T + V(\,\cdot\,;\lbrace \mathbf R_k\rbrace )$ with the LCAO initial guess
 
 $$
 \psi_0(\mathbf r) \;=\; \sum_k Z_k^{3/2}\,\exp\!\bigl(-Z_k\,|\mathbf r - \mathbf R_k|\bigr), \tag{3}
@@ -51,10 +51,10 @@ $$
 the bonding $\sigma_g$ combination for a homonuclear diatomic. After convergence, the total Born–Oppenheimer energy is
 
 $$
-E(\{\mathbf R_k\}) \;=\; \frac{\langle \psi_{\rm el} \,|\, \hat T + V \,|\, \psi_{\rm el}\rangle}{\langle \psi_{\rm el} \,|\, \psi_{\rm el}\rangle} \;+\; E_{\rm nn}(\{\mathbf R_k\}). \tag{4}
+E(\lbrace \mathbf R_k\rbrace ) \;=\; \frac{\langle \psi_{\rm el} \,|\, \hat T + V \,|\, \psi_{\rm el}\rangle}{\langle \psi_{\rm el} \,|\, \psi_{\rm el}\rangle} \;+\; E_{\rm nn}(\lbrace \mathbf R_k\rbrace ). \tag{4}
 $$
 
-Direct differentiation of $E$ with respect to $\mathbf R_k$, propagating through the converged $\psi_{\rm el}$, is the content of the Hellmann–Feynman theorem [Hellmann 1937, Feynman 1939]. Because $\psi_{\rm el}(\{\mathbf R_k\})$ is stationary with respect to electronic variations $\delta\psi$ at fixed nuclei — it is the variational minimum — the total derivative collapses to the partial:
+Direct differentiation of $E$ with respect to $\mathbf R_k$, propagating through the converged $\psi_{\rm el}$, is the content of the Hellmann–Feynman theorem [Hellmann 1937, Feynman 1939]. Because $\psi_{\rm el}(\lbrace \mathbf R_k\rbrace )$ is stationary with respect to electronic variations $\delta\psi$ at fixed nuclei — it is the variational minimum — the total derivative collapses to the partial:
 
 $$
 \frac{d E}{d\mathbf R_k} \;=\; \left\langle \psi_{\rm el} \,\Big|\, \frac{\partial V}{\partial \mathbf R_k} \,\Big|\, \psi_{\rm el}\right\rangle \;+\; \frac{\partial E_{\rm nn}}{\partial \mathbf R_k}. \tag{5}
@@ -89,11 +89,11 @@ Adam is used in preference to plain gradient descent despite the smooth landscap
 
 ### 6.1 Born–Oppenheimer curve
 
-`bo_curve(R_values, grid)` computes $E(R)$ at arbitrary separations for a homonuclear diatomic aligned with the $z$-axis, nuclei at $\pm R/2$. On a $40^3$ grid ($L = 10\,a_0$, $h = 0.25$, 4th-order stencil, $\varepsilon = h/2$, 1500 imag-time steps per point) the curve sampled at $R \in \{1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0\}\,a_0$ exhibits a bound minimum in $[1.5, 2.5]\,a_0$ with stabilisation below the dissociation asymptote $E(R \to \infty) \to -0.5\,E_h$ (a single hydrogen atom with an infinitely distant proton); see `test_bo_curve_has_bound_minimum`.
+`bo_curve(R_values, grid)` computes $E(R)$ at arbitrary separations for a homonuclear diatomic aligned with the $z$-axis, nuclei at $\pm R/2$. On a $40^3$ grid ($L = 10\,a_0$, $h = 0.25$, 4th-order stencil, $\varepsilon = h/2$, 1500 imag-time steps per point) the curve sampled at $R \in \lbrace 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0\rbrace \,a_0$ exhibits a bound minimum in $[1.5, 2.5]\,a_0$ with stabilisation below the dissociation asymptote $E(R \to \infty) \to -0.5\,E_h$ (a single hydrogen atom with an infinitely distant proton); see `test_bo_curve_has_bound_minimum`.
 
 ### 6.2 Bond length via gradient descent
 
-**Table 1.** H$_2^+$ equilibrium bond length recovered by Adam on $E(\{\mathbf R_k\})$. All runs: 4th-order stencil, $\varepsilon = h/2$, LCAO initial guess, `gato-h2plus` CLI. Reference: Burrau 1927, $R_e = 1.9972\,a_0$, $E(R_e) = -0.6026\,E_h$.
+**Table 1.** H$_2^+$ equilibrium bond length recovered by Adam on $E(\lbrace \mathbf R_k\rbrace )$. All runs: 4th-order stencil, $\varepsilon = h/2$, LCAO initial guess, `gato-h2plus` CLI. Reference: Burrau 1927, $R_e = 1.9972\,a_0$, $E(R_e) = -0.6026\,E_h$.
 
 | $N$ | $L$ ($a_0$) | $h$ | $R_0$ | $n_{\rm el}$ | geom steps | $R_e$ (measured) | $E$ (measured) | $|R_e - R_e^{\rm ref}|$ | $E - E^{\rm ref}$ |
 |-----|-------------|------|-------|---------------|------------|-------------------|----------------|--------------------------|----------------------|
