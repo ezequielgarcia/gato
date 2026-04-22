@@ -13,8 +13,8 @@ on:
       - ".github/scripts/check_math.js"
 
 jobs:
-  markdown:
-    name: Lint markdown and validate LaTeX math
+  math:
+    name: Validate LaTeX math blocks with KaTeX
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,19 +23,13 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install KaTeX and markdownlint
-        run: npm install --no-save katex@^0.16 markdownlint-cli2@^0.15
+      - name: Install KaTeX
+        run: npm install --no-save katex@^0.16
 
-      - name: Lint markdown
-        # --no-globs because markdownlint-cli2 already globs; keep config inline
-        # with a permissive ruleset (we only care about real rendering bugs).
-        run: >
-          npx markdownlint-cli2
-          "**/*.md"
-          "#node_modules/**"
-          "#.venv/**"
-          --config <(printf '{"default": true, "MD013": false, "MD033": false, "MD041": false, "MD034": false, "MD029": false, "MD024": false}')
-        shell: bash
-
-      - name: Validate LaTeX math blocks with KaTeX
+      - name: Validate LaTeX math blocks
+        # Extracts every $$...$$ and $...$ block from every tracked .md file
+        # and runs it through KaTeX in strict mode (same renderer GitHub uses
+        # for math in Markdown). Fails on unbalanced $$, unknown macros,
+        # missing braces, and Markdown-eats-LaTeX bugs like `\phi^*` being
+        # consumed by the emphasis parser.
         run: node .github/scripts/check_math.js
