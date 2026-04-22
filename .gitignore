@@ -31,3 +31,11 @@ coverage.xml
 
 # Derived docs (regenerated via pandoc)
 docs/*.pdf
+
+# MkDocs
+site/
+docs/index.md
+
+# Node (used only by CI docs math validator)
+node_modules/
+package-lock.json
