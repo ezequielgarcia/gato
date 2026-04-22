@@ -1,5 +1,7 @@
 # GATO: A differentiable, matrix-free 3D Schrödinger solver in JAX — Phase 1: the hydrogen atom
 
+> **Read this on <https://ezequielgarcia.github.io/gato/phase1_paper/>** — GitHub's markdown viewer does not render display math reliably.
+
 **Ezequiel Garcia**
 
 *Phase 1 technical report. Revision 9, April 2026.*

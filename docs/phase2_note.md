@@ -1,5 +1,7 @@
 # GATO Phase 2: H₂⁺ with differentiable geometry
 
+> **Read this on <https://ezequielgarcia.github.io/gato/phase2_note/>** — GitHub's markdown viewer does not render display math reliably.
+
 **Companion note to `phase1_paper.md`.** Phase 2 re-uses every numerical primitive of Phase 1 (cell-centered grid, finite-difference kinetic operator, softened Coulomb, imaginary-time propagation, Rayleigh-quotient energy) without modification. Readers are assumed familiar with those; this note describes only what is new.
 
 ## Abstract

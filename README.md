@@ -2,6 +2,10 @@
 
 **Grid Autodiff Theory of Orbitals**
 
+> Math renders cleanly on the rendered docs site: **<https://ezequielgarcia.github.io/gato/>**.
+> GitHub's markdown viewer mangles display-math spacing and some macros — prefer the site for the phase notes.
+
+
 A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The trajectory goes hydrogen → $\text{H}_2^+$ → helium → **restricted Hartree–Fock** on H₂, LiH, and H₂O with geometry optimization (Phase 4, the project's **ab-initio terminal target**), followed by an explicitly-parameterized **DFT-LDA** pass on the same molecules for method comparison (Phase 5). Single-particle *neural* ansätze (Equinox MLP × exact Kato cusp) are used alongside grid ansätze throughout — pedagogically from Phase 1 and as representations of the self-consistent orbitals in Phases 3–5. GATO intentionally **stops short of the many-body Slater-backflow neural VMC regime** that is already handled at production quality by [DeepMind's FermiNet](https://github.com/google-deepmind/ferminet) (also a JAX codebase, trivially composable with GATO). The whole pipeline stays differentiable, matrix-free, and memory-efficient, with molecular geometry obtained from first principles by gradient descent on the energy. Development and production run on a single consumer GPU (RTX 5070); no cloud compute or HPC allocation is required.
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
