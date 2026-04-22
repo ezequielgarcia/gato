@@ -529,6 +529,8 @@ At $N = 96$, one application of the Hamiltonian amounts to a 7-point stencil plu
 
 ## 7. Extensions to Phases 2 and 3
 
+*Forward-looking section preserved as originally shipped. Phase 2 has since been completed; see `phase2_note.md` for the implementation details and the H$_2^+$ geometry-optimization results ($R_e = 1.9986\,a_0$ vs. the Burrau 1927 analytic $1.9972\,a_0$).*
+
 The design of the operator and Hamiltonian interfaces in Sec. 6.2 is not incidental; it is chosen to accommodate the subsequent phases without structural changes.
 
 **Phase 2 — multi-nucleus single-electron systems.** The potential generalizes from a single centre to a sum over nuclei,
