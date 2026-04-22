@@ -2,7 +2,7 @@
 
 **Grid Autodiff Theory of Orbitals**
 
-A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The long-term trajectory goes hydrogen → $\text{H}_2^+$ → helium → mean-field molecules → a neural many-body wavefunction for H₂, LiH, HF, and H₂O → culminating in the water dimer $(\text{H}_2\text{O})_2$, the smallest piece of condensed water. Development and Phase 1–5 production run on a single consumer GPU (RTX 5070); Phase 6 (N₂, water dimer) bursts to a rented A100 for final training runs. The whole pipeline stays differentiable, matrix-free, and memory-efficient throughout, with molecular geometry obtained from first principles by gradient descent on the energy.
+A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The trajectory goes hydrogen → $\text{H}_2^+$ → helium → **restricted Hartree–Fock** on H₂, LiH, and H₂O with geometry optimization (Phase 4, the project's **ab-initio terminal target**), followed by an explicitly-parameterized **DFT-LDA** pass on the same molecules for method comparison (Phase 5). Single-particle *neural* ansätze (Equinox MLP × exact Kato cusp) are used alongside grid ansätze throughout — pedagogically from Phase 1 and as representations of the self-consistent orbitals in Phases 3–5. GATO intentionally **stops short of the many-body Slater-backflow neural VMC regime** that is already handled at production quality by [DeepMind's FermiNet](https://github.com/google-deepmind/ferminet) (also a JAX codebase, trivially composable with GATO). The whole pipeline stays differentiable, matrix-free, and memory-efficient, with molecular geometry obtained from first principles by gradient descent on the energy. Development and production run on a single consumer GPU (RTX 5070); no cloud compute or HPC allocation is required.
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
 
@@ -300,27 +300,24 @@ Tests enable this automatically via `tests/conftest.py`.
 
 ### 5.0 Systems at a glance
 
-Every physical system the project solves, across all six phases. A few molecules (H₂, LiH, H₂O) appear twice — intentionally — because they are solved first with mean-field and later with neural VMC, which gives us direct same-molecule method comparisons.
+Every physical system the project solves, organized by method. The same molecules (H₂, LiH, H₂O) appear at both RHF (Phase 4) and LDA (Phase 5) so the two methods can be compared on identical geometries; the ab-initio terminal result lives at Phase 4.
 
-| Phase | System | $n_e$ | Nuclei | Method | Hardware |
-|-------|--------|-------|--------|--------|----------|
-| 1 ✓ | H (hydrogen atom) | 1 | 1 | grid / neural VQE | CPU |
-| 1 ✓ | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, Z-scaled | CPU |
-| 2 | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces | CPU |
-| 3 | He (helium atom) | 2 | 1 | RHF / KS-DFT (SCF) | CPU |
-| 4 | H₂ | 2 | 2 | SCF + autodiff forces | CPU / 5070 |
-| 4 | LiH | 4 | 2 | SCF + autodiff forces | CPU / 5070 |
-| 4 | H₂O | 10 | 3 | SCF + autodiff forces at LDA level | 5070 |
-| 5 | H₂ | 2 | 2 | neural VMC (FermiNet-class) | 5070 |
-| 5 | LiH | 4 | 2 | neural VMC | 5070 |
-| 5 | HF | 10 | 2 | neural VMC; diatomic warm-up for H₂O | 5070 |
-| 5 | H₂O | 10 | 3 | neural VMC; headline single-molecule result | 5070 |
-| 6 | N₂ | 14 | 2 | neural VMC; triple-bond dissociation benchmark | cloud A100 |
-| 6 | $(\text{H}_2\text{O})_2$ water dimer | 20 | 6 | neural VMC; **terminal project target** | cloud A100 |
-| 6 (stretch) | $(\text{H}_2\text{O})_4$ | 40 | 12 | neural VMC | cloud A100+ |
-| 6 (stretch) | $\text{CH}_4 \cdot (\text{H}_2\text{O})_n$ | ~70 | ~12 | neural VMC (clathrate fragment) | cloud A100+ |
+| Phase | System | $n_e$ | Nuclei | Method | Ab initio? | Hardware |
+|-------|--------|-------|--------|--------|-----------|----------|
+| 1 ✓ | H (hydrogen atom) | 1 | 1 | grid / neural VQE | yes | CPU |
+| 1 ✓ | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, $Z$-scaled | yes | CPU |
+| 2 | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces on $\mathbf R$ | yes | CPU |
+| 3 | He (helium atom) | 2 | 1 | RHF, SCF | yes | CPU / 5070 |
+| 4 | H₂ | 2 | 2 | RHF + autodiff forces | yes | 5070 |
+| 4 | LiH | 4 | 2 | RHF + autodiff forces | yes | 5070 |
+| 4 | H₂O | 10 | 3 | RHF, geometry optimization — **project's ab-initio terminal target** | yes | 5070 |
+| 5 | H₂, LiH, H₂O | same as above | same | KS-DFT (LDA), method comparison vs. RHF | no (parameterized XC) | 5070 |
 
-**Distinct molecular systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, HF, H₂O, N₂, $(\text{H}_2\text{O})_2$, plus the two stretch goals. Each phase's Exit Criterion section below specifies the accuracy target for every member of that row.
+**Distinct systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, H₂O.
+
+**Neural ansätze** (Equinox MLP × Kato cusp) are used alongside grid ansätze throughout, both as a pedagogical tool (Phase 1's hydrogen VQE) and as a viable representation of the self-consistent orbitals inside the Phase 3–5 SCF loops.
+
+**Ab-initio boundary.** Phase 4 (restricted Hartree–Fock) is the strictly-ab-initio terminal result: one Slater determinant, exact electron–electron Coulomb and exchange, no empirical or numerically-fit parameters anywhere. Phase 5 (Kohn–Sham DFT with the LDA functional) is an explicitly-parameterized extension: the LDA exchange-correlation functional is numerically fit to quantum Monte Carlo data for the homogeneous electron gas [Ceperley–Alder 1980, Perdew–Zunger 1981], so the method carries reference-calculation parameters. It's included because LDA often gives more *accurate* geometries than RHF despite being less *principled* — a pedagogically important contrast. Beyond Phase 5, correlated many-body wavefunctions are handled by FermiNet (see §5.6).
 
 ### Phase 1 — Differentiable Hydrogen Atom *(complete)*
 
@@ -370,74 +367,60 @@ Enter many-electron land on the simplest closed-shell atom. Single nucleus, two 
 
 **Exit criterion:** helium ground-state energy within chemical accuracy ($\sim 1$ mHa) of reference values ($-2.862\,E_h$ RHF, $-2.834\,E_h$ LDA, $-2.9037\,E_h$ exact).
 
-### Phase 4 — Mean-field molecules and geometry optimization
+### Phase 4 — Restricted Hartree–Fock molecules (ab-initio terminal target)
 
-Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) to do real chemistry at the mean-field level.
+Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) into *strictly ab-initio* mean-field molecules. One Slater determinant, exact Coulomb and exchange, no empirical parameters.
 
-- [ ] SCF with multi-center potentials (H₂, LiH, H₂O at fixed geometry)
+- [ ] SCF with multi-center potentials, Hartree term $J[\rho]$ via 3D FFT convolution
+- [ ] **Exact exchange operator** $\hat K$ implemented as $n_\text{orb}^2$ real-space Poisson solves per SCF iteration — the computational difference from Phase 5's LDA is in this operator alone
 - [ ] Hellmann–Feynman + Pulay forces via `jax.grad` on the self-consistent energy
 - [ ] Joint $(\theta_{\text{orbitals}}, \mathbf R_{\text{nuclei}})$ optimization
-- [ ] Optional pseudopotentials to avoid resolving core electrons on the grid
-- [ ] H₂O geometry optimization at the DFT-LDA level — should give bond angle $\approx 104^\circ$, $d_{\text{OH}} \approx 0.97$ Å
+- [ ] H₂ (2 e⁻, 1 orbital): bond length $\approx 1.40\,a_0$ at RHF, compared to experiment $1.401\,a_0$
+- [ ] LiH (4 e⁻, 2 orbitals): bond length $\approx 3.02\,a_0$ at RHF
+- [ ] H₂O (10 e⁻, 5 orbitals): bond angle $\approx 106°$ at RHF, bond length $\approx 1.78\,a_0$
 
-**Exit criterion:** H₂O bond angle within $1^\circ$ of the experimental $104.5^\circ$ at the LDA level; correlating with published DFT-LDA values. GPU helpful but not required.
+**Exit criterion (project's ab-initio terminal target):** H₂O geometry recovered at the RHF level consistent with published RHF reference values (angle $\approx 106°$, $d_{\text{OH}} \approx 1.78\,a_0$). Energy within a few mHa of reference RHF. The systematic $\sim\!1.5°$ overestimate of the bond angle vs. experiment is a known RHF limitation — fixing it requires either a parameterized functional (Phase 5) or correlated wavefunctions (FermiNet, §5.6).
 
-### Phase 5 — Neural many-body wavefunction: single molecules
+### Phase 5 — Kohn–Sham DFT with LDA (parameterized extension)
 
-The neural-VMC milestone. Treat electrons explicitly; parametrize $\Psi(\mathbf r_1, \ldots, \mathbf r_n)$ as a neural Slater-backflow ansatz (FermiNet / PauliNet family) evaluated at Monte Carlo samples. Rather than jumping directly to water, we ramp up through a progression of single molecules of increasing electron count, so each step validates the infrastructure against a less complicated target.
+Same SCF framework as Phase 4, with the exact exchange operator $\hat K$ swapped for a Kohn–Sham exchange-correlation functional — specifically the local-density approximation (LDA) with the Perdew–Zunger parameterization of the Ceperley–Alder homogeneous-electron-gas QMC data. This phase is **explicitly not ab initio** in the strict sense: the LDA XC functional has numerical parameters fit to reference calculations. It is included for two reasons:
 
-**Core infrastructure (shared by every molecule in this phase):**
+1. **Method-comparison.** LDA on H₂O gives a bond angle of $\approx 104.5°$ — closer to experiment than RHF. Running the same geometries through both methods (and optionally through FermiNet later) is the cleanest demonstration of the parameterized-vs-ab-initio-vs-correlated tradeoff.
+2. **Minimal marginal code.** Once the SCF loop of Phase 4 exists, the only new code is the LDA exchange-correlation functional itself — a ~10-line point-wise function of the local density $\rho(\mathbf r)$.
 
-- [ ] `ansatz/determinant.py` — Slater determinants of learned orbitals
-- [ ] `ansatz/fermi_net.py` — permutation-equivariant backflow network with per-electron features and pairwise streams
-- [ ] Jastrow factor with explicit e–e and e–n cusp conditions (reuses the Kato cusp machinery from Phase 1)
-- [ ] `sampling.py` — Metropolis–Hastings sampler over $|\Psi|^2$ in $3N$-dimensional space
-- [ ] `solvers/vmc.py` — variational Monte Carlo with `kfac-jax` natural-gradient optimizer
-- [ ] Joint optimization of network weights + nuclear positions
+- [ ] `functionals.py` — LDA exchange (Dirac) and correlation (Perdew–Zunger 1981)
+- [ ] Swap `Fock.exact_exchange` for `ks.V_xc[rho]` in the Phase-4 SCF loop
+- [ ] Re-run H₂, LiH, H₂O at the LDA level; compare geometries and energies directly to the Phase 4 RHF numbers
 
-**Molecule progression:**
+**Exit criterion:** H₂O bond angle within $1°$ of experimental $104.5°$ at the LDA level; same for bond length within $0.02\,a_0$ of experimental. Numbers must match published DFT-LDA reference values.
 
-| Sub-target | Electrons | Why this molecule |
-|---|---|---|
-| 5a. H₂ | 2 | smallest VMC test; exact energy $-1.1744\,E_h$ known to 8 decimals; validates determinant + Jastrow machinery before scaling |
-| 5b. LiH | 4 | first polar diatomic; 4-electron closed-shell; bond length $\approx 3.015\,a_0$ |
-| 5c. HF | 10 | diatomic stepping stone to water: same electron count, only a bond length to optimize (no angle) |
-| 5d. H₂O | 10 | the project's headline single-molecule result: bond angle $\approx 104.5°$, bond length $\approx 0.958\,$ Å |
+### 5.6 Beyond Phase 5: handing off to FermiNet
 
-**Hardware**: the author's RTX 5070 (12 GB, consumer Blackwell). Phase-5 runs use mixed precision — FP32 for the network forward pass, FP64 only for the local-energy accumulator — to work around the 5070's $\approx 1/32$ FP64 throughput. Expected wall-clock: single-digit hours for H₂/LiH, ~1 day each for HF and H₂O at chemical-accuracy convergence.
+Phase 4 is the terminal scope of GATO proper. Anything requiring correlated many-body wavefunctions — kcal/mol-accurate binding energies, the water dimer, N₂'s triple-bond dissociation curve, open-shell or strongly-correlated systems — is better handled by [DeepMind's FermiNet](https://github.com/google-deepmind/ferminet). FermiNet is also written in JAX, so the handoff is trivial: the same CUDA/cuDNN stack, the same JIT cache, no framework switch. A typical workflow is to use GATO to prototype and understand a system at mean-field level, then — if correlation matters — run the same geometry through FermiNet for the production number.
 
-**Exit criterion:** H₂O geometry recovered to within $1°$ of $104.5°$ and $0.01\,$ Å of $0.958\,$ Å, at energy within $\sim 5\,$ mHa of the exact nonrelativistic value $-76.44\,E_h$. Beyond-that targets continue in Phase 6.
+What is *not* duplicated between GATO and FermiNet:
 
-### Phase 6 — Strong correlation and the water dimer
+- GATO covers the **single-particle and mean-field regime** on a real-space grid: hydrogen, hydrogenic ions, $\text{H}_2^+$, helium, and light closed-shell molecules with DFT-LDA + autodifferentiated forces. FermiNet does not ship a grid-based Schrödinger solver or an SCF loop.
+- FermiNet covers the **many-body correlated regime**: neural Slater-backflow wavefunctions trained by variational Monte Carlo with KFAC. GATO deliberately does not re-implement this — the production implementation is already open source and state-of-the-art.
 
-The end-target for the project: $(\text{H}_2\text{O})_2$, the smallest piece of condensed water and the foundational unit of ice-Ih. Also a natural home for classical strong-correlation benchmarks that demonstrate where neural VMC pays off over mean-field.
-
-- [ ] **N₂ (14 e⁻)** — canonical strong-correlation benchmark; triple-bond dissociation curve where mean-field methods notoriously fail. Published by FermiNet and PauliNet; direct apples-to-apples comparison.
-- [ ] **$(\text{H}_2\text{O})_2$ water dimer (20 e⁻)** — hydrogen-bonded system, ~5 kcal/mol binding energy sitting on top of two monomer energies. The first molecule where the project's "planetary ices" motivation actually starts: (H₂O)₂ is what ice-Ih is built from.
-- [ ] (stretch) **$(\text{H}_2\text{O})_4$** and larger water clusters as the compute allows
-- [ ] (stretch) A methane clathrate fragment CH₄·(H₂O)ₙ — relevant to Titan
-
-**Hardware**: rented cloud A100 80 GB (Lambda, RunPod, Paperspace) at $1-2 / hr on-demand, for production runs. Native FP64 throughput, 80 GB VRAM, and a typical water-dimer run at $\sim 12\text{-}36$ hours translates to roughly $\$20\text{-}75$ per molecule. Development and debugging continue to happen on the local 5070; the cloud GPU is only spun up for the final production training run, per molecule.
-
-**Exit criterion:** water-dimer binding energy within 1 kcal/mol of the reference CCSD(T) value $\approx -5.0\,$ kcal/mol at the equilibrium geometry; equilibrium O–O distance within $0.05\,$ Å of the experimental $2.98\,$ Å.
-
-Past Phase 6 (larger water clusters, periodic ice, condensed methane) is genuine HPC territory (multi-GPU A100/H100 nodes or real cluster allocations), and is scope for a follow-on project.
+This split keeps GATO's scope bounded (3–6 months of work rather than 12+), and leaves the re-implementation of well-solved problems to the teams that have invested years optimizing them.
 
 ---
 
 ## 6. Dependencies per phase
 
-The package stays pure-Python, pure-JAX throughout. Total additional dependencies across all six phases: **two runtime packages**.
+The package stays pure-Python, pure-JAX throughout. No new runtime dependencies are introduced across Phases 2–5.
 
 | Phase | Hardware | New runtime deps | Dev-only deps | Why |
 |---|---|---|---|---|
 | 1 (done) | laptop CPU | `jax`, `optax`, `equinox`, `numpy`, `scipy`, `matplotlib` | `pytest` | base stack |
 | 2 (H₂⁺) | laptop CPU | none | none | multi-center potential + autodiff forces only |
-| 3 (helium SCF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; LDA is ~10 lines of math |
-| 4 (mean-field molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf is only for cross-validating our numbers against a trusted reference |
-| 5 (neural VMC: H₂ → H₂O) | local 5070 (FP32 net, FP64 energy accumulator) | **`kfac-jax`**, optional **`blackjax`** | none | KFAC natural-gradient is near-essential for VMC convergence; blackjax provides HMC if we want it (Metropolis is easy to hand-roll) |
-| 6 (N₂, water dimer) | cloud A100 80 GB ($1-2/hr) | same as Phase 5 | none | development on the 5070, production runs burst to cloud where native FP64 + 80 GB VRAM matter |
-| all, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
+| 3 (helium RHF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; exact exchange is a 3D Poisson solve |
+| 4 (RHF molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf only for cross-validating against a trusted reference |
+| 5 (LDA molecules) | local 5070 | none | none (reuse pyscf for comparison) | LDA is ~10 lines of point-wise math; reuses the Phase 4 SCF loop |
+| any, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
+
+For correlated many-body wavefunctions, use [FermiNet](https://github.com/google-deepmind/ferminet) directly — it ships its own JAX dependency set that coexists with GATO's.
 
 What's **not** needed:
 
@@ -462,6 +445,8 @@ What's **not** needed:
 - Griffiths & Schroeter, *Introduction to Quantum Mechanics*, 3rd ed. — chapters on hydrogen and the variational principle.
 - Martin, *Electronic Structure: Basic Theory and Practical Methods*, Cambridge — the canonical DFT/HF reference used for Phases 3 and 4.
 - Szabo & Ostlund, *Modern Quantum Chemistry*, Dover — Hartree–Fock, configuration interaction, and the SCF loop.
+- Ceperley, D. M. & Alder, B. J. (1980), "Ground state of the electron gas by a stochastic method", *Physical Review Letters* **45**, 566 — the homogeneous-electron-gas QMC data that LDA is fit to.
+- Perdew, J. P. & Zunger, A. (1981), "Self-interaction correction to density-functional approximations for many-electron systems", *Physical Review B* **23**, 5048 — the LDA parameterization used in Phase 5.
 - Kato, T. (1957), "On the eigenfunctions of many-particle systems in quantum mechanics", *Communications on Pure and Applied Mathematics* **10**, 151–177 — the nuclear- and electron-coalescence cusp conditions encoded into the neural ansatz.
 - Peruzzo et al. (2014), "A variational eigenvalue solver on a photonic quantum processor" — the original VQE paper.
 - Pfau et al. (2020), "Ab initio solution of the many-electron Schrödinger equation with deep neural networks" — FermiNet, the blueprint for Phase 5.
@@ -490,4 +475,4 @@ Phase 1 implementation is **complete end-to-end**.
 
 The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 40 tests pass.
 
-Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3 and 4 (helium SCF → mean-field molecules) follow on the local machine; Phase 5 runs on a single consumer GPU (RTX 5070) over a ladder of molecules (H₂ → LiH → HF → H₂O); Phase 6 bursts to a rented cloud A100 for N₂ and the water dimer. See §5 and §6 for the scoped hardware and dependency trajectory.
+Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3 and 4 (helium RHF → RHF molecules including H₂O) follow on the local machine. Phase 4 is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; beyond that, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
