@@ -160,7 +160,7 @@ $$
 
 which is bounded at the origin by $-1/\epsilon$ and asymptotically Coulombic for $r \gg \epsilon$. We select $\epsilon = h/2$, which couples the regularization to the grid resolution so that both sources of error vanish jointly as $h \to 0$. The sensitivity of $E_0$ to $\epsilon$ is studied as part of the convergence analysis in Sec. 5.
 
-An alternative approach — non-uniform or logarithmic grids concentrated near nuclear centers — is deferred. The uniform-grid softening strategy suffices for the Phase 1 benchmark and extends naturally to Phase 2.
+An alternative approach — non-uniform or logarithmic grids concentrated near nuclear centers — is not used in the main solver, because such grids do not extend to the multi-nucleus molecular geometries that the project actually targets in Phases 2–5. However, a standalone single-center 1D log-radial solver with the *unsoftened* potential $V(r) = -Z/r$ is kept at `src/gato/physics/radial_hydrogen.py` as an independent cross-check on the softening-extrapolated hydrogen energy of the 3D Cartesian stack; it is described in Sec. 5.6.
 
 ---
 
@@ -272,7 +272,7 @@ A Lanczos iteration with full reorthogonalization was implemented in `src/gato/s
 
 ### 4.9 Test coverage summary
 
-All forty tests — seven for the grid and integration helpers, six for the 2nd-order Laplacian, five for the 4th-order Laplacian, four for the Lanczos solver, three for the Hamiltonian, five for the potentials, three for the observables, four for the Kato-cusp factorization of the neural ansatz (verifying the spherically-averaged radial log-slope at each nucleus equals $-Z$, and that the wavefunction is finite everywhere despite the bare Coulomb singularity), and three end-to-end hydrogen tests (imag-time ground state, Z-scaling across $\{1,2,3\}$, and neural VQE convergence) — pass in approximately 65 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
+All forty-six tests — seven for the grid and integration helpers, six for the 2nd-order Laplacian, five for the 4th-order Laplacian, four for the Lanczos solver, three for the Hamiltonian, five for the potentials, three for the observables, four for the Kato-cusp factorization of the neural ansatz (verifying the spherically-averaged radial log-slope at each nucleus equals $-Z$, and that the wavefunction is finite everywhere despite the bare Coulomb singularity), three end-to-end hydrogen tests (imag-time ground state, Z-scaling across $\{1,2,3\}$, and neural VQE convergence), and six for the 1D log-radial cross-check of Sec. 5.6 (hydrogenic energy at $Z\in\{1,2,3\}$, normalization, monotone grid convergence, and unsoftened-potential smoke test) — pass in approximately 125 seconds on a single CPU core in float64. The full test report is stored in `tests/` and is reproducible via `uv run pytest -v`.
 
 ---
 
@@ -391,13 +391,56 @@ Linear least-squares fits yield:
 
 The linear model reduces the error to sub-percent, consistent with the analytic expectation that the leading softening correction is $O(\epsilon)$ with a logarithmic prefactor from the near-nuclear integration region. The pure-quadratic fit is inappropriate; the combined linear+quadratic model slightly overshoots because with only five data points the quadratic coefficient absorbs residual nonlinearities and biases $E_0$.
 
-### 5.6 Radial probability density of the 1s ground state
+### 5.6 Log-radial cross-check: the $\epsilon \to 0$ extrapolation is consistent with an unsoftened solution
+
+The linear extrapolation of Sec. 5.5 assumes the fitted intercept is the true bare-Coulomb ground-state energy. We test that assumption independently by solving the same hydrogen atom on a coordinate system where no softening is needed at all: a logarithmically spaced 1D radial grid, with the full singular potential $V(r) = -Z/r$ in place.
+
+Under the substitution $\psi(\mathbf r) = u(r)/r$ for the spherically-symmetric $\ell = 0$ state, the radial Schrödinger equation becomes
+
+$$
+-\tfrac{1}{2}\,u''(r) \;-\; \frac{Z}{r}\,u(r) \;=\; E\,u(r), \qquad u(0) = 0, \quad u(r) \xrightarrow{r\to\infty} 0. \tag{13}
+$$
+
+The radial coordinate is mapped from a uniform cell-centered computational grid $\xi \in (0, 1)$ by
+
+$$
+r(\xi) \;=\; r_{\min}\bigl(e^{\alpha\xi} - 1\bigr), \qquad \alpha = \log\!\bigl(r_{\max}/r_{\min} + 1\bigr), \tag{14}
+$$
+
+so that $r = 0$ is at $\xi = 0$ exactly and the spacing in $r$ shrinks exponentially toward the nucleus. Here $r_{\min}$ is a scale parameter (not the smallest sampled $r$) that sets the crossover between linear-in-$\xi$ behavior near the origin and exponential behavior at large $\xi$. With $r_{\min} = 0.01\,a_0$ and $r_{\max} = 40\,a_0$ the smallest sampled radius is $\approx 10^{-4}\,a_0$, at which $V = -10^4\,E_h$ is finite, representable in float64, and produces a well-behaved eigenvalue problem; no $\epsilon$ is introduced anywhere.
+
+Fourth-order central-difference stencils acting on $u(\xi)$ are combined via the chain rule
+
+$$
+u''(r) \;=\; \frac{u''_\xi(\xi)}{r'(\xi)^2} \;-\; \frac{r''(\xi)}{r'(\xi)^3}\,u'_\xi(\xi), \tag{15}
+$$
+
+with $r'(\xi) = \alpha(r + r_{\min})$ and $r''(\xi) = \alpha\,r'(\xi)$. The Dirichlet condition $u(0) = 0$ is enforced by odd-parity padding of the stencil at $\xi = 0$ (i.e. $u_{-1-j} = -u_j$), which is both physically correct and preserves the full 4th-order truncation accuracy at the first two interior points. At $\xi = 1$ we zero-pad, which is accurate since $u(r_{\max}) \sim e^{-Z r_{\max}}$ is below float64 underflow.
+
+The resulting Hamiltonian is Hermitian under the weighted inner product $\int u v\,dr \approx h_\xi \sum_j r'(\xi_j)\,u_j v_j$; equivalently, $W\hat H$ is symmetric with $W = \text{diag}(r'(\xi_j))$. Conjugation by $W^{1/2}$ converts the problem to a standard symmetric eigenproblem solved by dense `jnp.linalg.eigh`. Since the system is intrinsically 1D, $N \lesssim 10^3$ is plenty and dense diagonalization costs only milliseconds.
+
+**Table 7.** Hydrogen ground-state energy on the log-radial grid. Pure $V = -Z/r$, $r_{\min}=0.01\,a_0$, $r_{\max}=40\,a_0$, 4th-order stencil, odd-parity inner boundary.
+
+| $N$ | $E_0\ (E_h)$ | $|E_0 - (-0.5)|$ |
+|-----|--------------|------------------|
+| 100 | $-0.4999957$ | $4.3\times 10^{-6}$ |
+| 200 | $-0.4999987$ | $1.3\times 10^{-6}$ |
+| 400 | $-0.4999997$ | $3.4\times 10^{-7}$ |
+| 800 | $-0.4999999$ | $8.7\times 10^{-8}$ |
+
+The $N = 800$ result agrees with the exact $-0.500\,E_h$ to seven decimal places. Applied to the hydrogenic ions Z=2 and Z=3 with $r_{\max}$ reduced proportionally, the same code reproduces $-Z^2/2$ to $2\times 10^{-6}\,E_h$ and $7\times 10^{-6}\,E_h$ respectively at $N = 400$.
+
+This result confirms the interpretation of the softening-extrapolation analysis in Sec. 5.5. The 3D Cartesian softened stack returns $-0.504\,E_h$ (residual $+0.004$); the log-radial unsoftened stack returns $-0.5000\,E_h$. The two methods bracket the true value from above and essentially reach it, and their agreement within $4\,\text{mHa}$ confirms that the residual of Sec. 5.5 is fully attributable to the softening prescription rather than to any other systematic error in the 3D pipeline.
+
+The log-radial solver is implemented in `src/gato/physics/radial_hydrogen.py` (~115 lines) and is not used anywhere else in the project: it is specialized to a single nucleus at the origin with $\ell = 0$, and therefore does not extend to the multi-center Phase 2 (H$_2^+$), the many-electron Phase 3 (He), or any of the Phase 4–5 molecules. Its role is strictly as an independent sanity check on the Phase 1 number.
+
+### 5.7 Radial probability density of the 1s ground state
 
 As a qualitative check that the converged wavefunction is shaped correctly and not merely energetically accurate, the radial probability density $P(r) = |\psi(\mathbf r)|^2 \cdot 4\pi r^2$ of the Lanczos ground state on an $80^3$ grid ($L = 12\,a_0$) is plotted against the analytic hydrogen 1s form $P_{\rm exact}(r) = 4 r^2 e^{-2r}$ in Figure 1. The numerical and analytic distributions agree within shell-binning discretization noise: the peak location ($r \approx 1\,a_0$, the Bohr radius), the asymptotic decay rate, and the overall shape are all reproduced.
 
 ![Figure 1. Hydrogen 1s radial probability density, $N = 80$, $L = 12\,a_0$, 4th-order Laplacian, Lanczos ground state. Blue: binned numerical $P(r)$. Black: analytic $4 r^2 e^{-2r}$.](figures/hydrogen_radial_density.png)
 
-### 5.7 Acceptance criteria
+### 5.8 Acceptance criteria
 
 The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$:
 
@@ -406,7 +449,7 @@ The Phase 1 acceptance criteria are met by the imaginary-time result at $N = 96$
 - **Orthonormality.** $\langle \psi|\psi\rangle = 1$ to float64 precision after post-training normalization.
 - **Qualitative radial density.** The binned $|\psi|^2$ on the converged grid ansatz peaks near $r \approx 1\,a_0$, consistent with the analytic $P(r) = 4r^2 e^{-2r}$.
 
-### 5.8 Reproducibility
+### 5.9 Reproducibility
 
 All results in this section are reproduced by
 
@@ -415,6 +458,7 @@ uv run gato-hydrogen --N 48  --L 10 --steps 2000 --solver imag_time
 uv run gato-hydrogen --N 64  --L 12 --steps 3000 --solver imag_time
 uv run gato-hydrogen --N 96  --L 12 --steps 4000 --solver imag_time
 uv run gato-hydrogen --N 40  --L 10 --steps 2000 --solver vqe_neural
+uv run pytest tests/test_radial_hydrogen.py -v
 ```
 
 Computations were performed in float64 on a single CPU core; typical wall-clock time is 15-60 seconds per invocation.

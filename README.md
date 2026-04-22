@@ -154,8 +154,9 @@ gato/
 │       │   ├── imag_time.py  ψ ← ψ − Δτ·Hψ  (grid ansatz)
 │       │   └── vqe.py        optax-driven Rayleigh-quotient minimization
 │       └── physics/
-│           └── hydrogen.py   end-to-end Phase 1 driver (CLI `gato-hydrogen`)
-├── tests/                  40 tests covering every module above
+│           ├── hydrogen.py          end-to-end Phase 1 driver (CLI `gato-hydrogen`)
+│           └── radial_hydrogen.py   1D log-radial cross-check, pure -Z/r
+├── tests/                  46 tests covering every module above
 └── benchmarks/             softening extrapolation and radial-density figure generators
 ```
 
@@ -236,7 +237,7 @@ For Phase 2 ($\text{H}_2^+$) the same class takes two nuclei; for Phase 5 (neura
 
 ### 3.6 Tests
 
-40 tests, all passing on a 32³–128³ grid in about 70 s on CPU. The key ones:
+46 tests, all passing on a 32³–128³ grid in about 125 s on CPU. The key ones:
 
 | Test | What it checks | Why it matters |
 |---|---|---|
@@ -247,6 +248,7 @@ For Phase 2 ($\text{H}_2^+$) the same class takes two nuclei; for Phase 5 (neura
 | `test_harmonic_oscillator_ground_state` | The analytic 3D HO ground state gives $E = \tfrac{3}{2}\omega$ to $< 1\%$. | End-to-end check of `Hamiltonian` composition against an analytic non-Coulomb benchmark. |
 | `test_neural_ansatz_cusp_single_center` | The spherically-averaged log-slope $\langle(1/\psi)\partial_r\psi\rangle_\Omega$ at the nucleus equals $-Z$. | Verifies Kato's cusp is satisfied by construction, for any random MLP weights. |
 | `test_hydrogen_imag_time_converges` | Imaginary-time propagation from the hydrogenic initial guess gives $E$ within 10 % of $-0.5\,E_h$ on a small grid. | End-to-end sanity of the full Phase 1 stack (grid → kinetic → potential → Hamiltonian → solver → observables). |
+| `test_hydrogenic_ground_state_energy[Z]` | Pure $V=-Z/r$ on a 1D log-radial grid recovers $-Z^2/2$ to $\lesssim 10^{-4}\,E_h$ at $N=400$ for $Z\in\{1,2,3\}$. | Independent cross-check of the softening-extrapolated 3D result, with no $\epsilon$ anywhere in the pipeline. |
 
 ### 3.7 Quick smoke test
 
@@ -339,7 +341,8 @@ Foundation: prove the machinery works by recovering the hydrogen ground state $E
 - [x] Hydrogenic $Z$-scaling: $E_0(Z) = -Z^2/2$ reproduced for H, He⁺, Li²⁺
 - [x] Softening extrapolation $\epsilon \to 0$ closes residual to $<1\%$ of analytic $-0.5\,E_h$
 - [x] Radial density figure: converged $P(r)$ vs. analytic $4r^2 e^{-2r}$
-- [x] Test suite (40 tests): plane-wave exactness at $O(h^2)$ and $O(h^4)$, Hermiticity, HO Lanczos spectrum, Kato cusp spherical-average, $Z$-scaling, end-to-end hydrogen
+- [x] Log-radial 1D cross-check (`physics/radial_hydrogen.py`): pure $V=-Z/r$ on a log-spaced grid, with odd-parity boundary at $r=0$ and a 4th-order chain-rule Laplacian. Reproduces $-Z^2/2$ to $\sim 10^{-7}\,E_h$ at $N=800$ for $Z\in\{1,2,3\}$, independently confirming the $\epsilon\to 0$ extrapolation
+- [x] Test suite (46 tests): plane-wave exactness at $O(h^2)$ and $O(h^4)$, Hermiticity, HO Lanczos spectrum, Kato cusp spherical-average, $Z$-scaling, end-to-end hydrogen, log-radial cross-check
 
 **Exit criterion:** recover $E_0 \approx -0.5\,E_h$ within 1% on a 64³ grid.
 
@@ -468,11 +471,13 @@ Phase 1 implementation is **complete end-to-end**.
 | Hydrogen $E_0$ (imag-time, $96^3$, $L=12$, $O(h^2)$) | | $-0.487\,E_h$ | $-0.500$ |
 | Hydrogen $E_0$ (imag-time, $64^3$, $L=12$, $O(h^4)$) | | $-0.479\,E_h$ | $-0.500$ |
 | Hydrogen $E_0$ (Lanczos + linear $\epsilon\to 0$ fit, $N=64$) | | $-0.504\,E_h$ | $-0.500$ |
+| Hydrogen $E_0$ (log-radial 1D, pure $-Z/r$, $N=400$) | | $-0.4999997\,E_h$ | $-0.500$ |
+| Hydrogen $E_0$ (log-radial 1D, pure $-Z/r$, $N=800$) | | $-0.4999999\,E_h$ | $-0.500$ |
 | Virial ratio $2\langle T\rangle/|\langle V\rangle|$ (96³) | | $0.984$ | $1.000$ |
 | He⁺ $E_0$ (imag-time, $48^3$, $L=6$, $O(h^4)$) | | $-1.900\,E_h$ | $-2.000$ |
 | Li²⁺ $E_0$ (imag-time, $48^3$, $L=4$, $O(h^4)$) | | $-4.275\,E_h$ | $-4.500$ |
 | 3D HO Lanczos ladder ($N=40$, $L=10$) | | $1.50, 2.50, 3.50, \ldots$ | $1.5, 2.5, 3.5, \ldots$ |
 
-The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 40 tests pass.
+The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 46 tests pass.
 
 Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3 and 4 (helium RHF → RHF molecules including H₂O) follow on the local machine. Phase 4 is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; beyond that, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
