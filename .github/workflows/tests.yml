@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast-tests:
+    name: Non-slow test suite (CPU)
+    runs-on: ubuntu-latest
+    # Cap so a pathological compile can't chew through the runner quota.
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          # The lockfile pins every transitive, so the cache key is stable.
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install project and dependencies
+        run: uv sync --frozen
+
+      - name: Run non-slow tests
+        # The three `@pytest.mark.slow` suites are test_hydrogen,
+        # test_h2_plus, and test_lanczos (ground-state / HO-ladder end-to-end
+        # runs on 40^3+ grids). They are legitimate but wall-clock heavy and
+        # stay out of per-push CI.
+        run: uv run pytest -m "not slow" -v --tb=short
