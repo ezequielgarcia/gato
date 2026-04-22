@@ -153,10 +153,12 @@ gato/
 │       ├── solvers/
 │       │   ├── imag_time.py  ψ ← ψ − Δτ·Hψ  (grid ansatz)
 │       │   └── vqe.py        optax-driven Rayleigh-quotient minimization
+│       ├── geometry.py       Nuclei pytree, bond length/angle, nuclear repulsion
 │       └── physics/
 │           ├── hydrogen.py          end-to-end Phase 1 driver (CLI `gato-hydrogen`)
+│           ├── h2_plus.py           end-to-end Phase 2 driver (CLI `gato-h2plus`)
 │           └── radial_hydrogen.py   1D log-radial cross-check, pure -Z/r
-├── tests/                  46 tests covering every module above
+├── tests/                  60 tests covering every module above
 └── benchmarks/             softening extrapolation and radial-density figure generators
 ```
 
@@ -237,7 +239,7 @@ For Phase 2 ($\text{H}_2^+$) the same class takes two nuclei; for Phase 5 (neura
 
 ### 3.6 Tests
 
-46 tests, all passing on a 32³–128³ grid in about 125 s on CPU. The key ones:
+60 tests, all passing on a 32³–128³ grid in about 175 s on CPU. The key ones:
 
 | Test | What it checks | Why it matters |
 |---|---|---|
@@ -308,7 +310,7 @@ Every physical system the project solves, organized by method. The same molecule
 |-------|--------|-------|--------|--------|-----------|----------|
 | 1 ✓ | H (hydrogen atom) | 1 | 1 | grid / neural VQE | yes | CPU |
 | 1 ✓ | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, $Z$-scaled | yes | CPU |
-| 2 | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces on $\mathbf R$ | yes | CPU |
+| 2 ✓ | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces on $\mathbf R$ | yes | CPU |
 | 3 | He (helium atom) | 2 | 1 | RHF, SCF | yes | CPU / 5070 |
 | 4 | H₂ | 2 | 2 | RHF + autodiff forces | yes | 5070 |
 | 4 | LiH | 4 | 2 | RHF + autodiff forces | yes | 5070 |
@@ -346,17 +348,19 @@ Foundation: prove the machinery works by recovering the hydrogen ground state $E
 
 **Exit criterion:** recover $E_0 \approx -0.5\,E_h$ within 1% on a 64³ grid.
 
-### Phase 2 — Multi-nucleus, single electron ($\text{H}_2^+$)
+### Phase 2 — Multi-nucleus, single electron ($\text{H}_2^+$) *(complete)*
 
-First taste of chemistry. A stepping stone that introduces two ideas needed for molecules without yet requiring many-electron machinery: multi-center potentials and geometry as a differentiable parameter.
+First taste of chemistry. A stepping stone that introduces two ideas needed for molecules without yet requiring many-electron machinery: multi-center potentials and geometry as a differentiable parameter. Scoped as a ~1–2 week capability milestone, not a major work phase — its purpose is to validate forces and multi-center machinery in the simplest setting before they get entangled with SCF in Phase 3.
 
-- [ ] `potentials.multi_center_coulomb` — $V(\mathbf r) = -\sum_k Z_k / |\mathbf r - \mathbf R_k|$ (softened)
-- [ ] `geometry.py` — nuclei data structure, bond-length / bond-angle observables
-- [ ] `jax.grad` of the energy with respect to nuclear positions $\mathbf R_k$ → **forces**
-- [ ] Geometry optimization as optax on $\mathbf R$
-- [ ] $\text{H}_2^+$ Born–Oppenheimer curve $E(R_{\text{HH}})$ and bond length via gradient descent
+- [x] `potentials.multi_center_softened_coulomb` — $V(\mathbf r) = -\sum_k Z_k / \sqrt{|\mathbf r - \mathbf R_k|^2 + \varepsilon^2}$
+- [x] `geometry.py` — `Nuclei` pytree (positions, charges), bond-length / bond-angle observables, nuclear repulsion, COM / recenter
+- [x] `jax.grad` of the Born–Oppenheimer energy with respect to $\mathbf R_k$ → **Hellmann–Feynman forces** (no back-propagation through the imag-time solver needed; variational stationarity cancels Pulay at convergence)
+- [x] Geometry optimization as optax on $\mathbf R$, with charge-weighted COM pinned to the origin
+- [x] `ansatz.grid.init_lcao` — bonding σ_g initial guess (sum of hydrogenic 1s)
+- [x] `physics/h2_plus.py` — end-to-end driver: `solve_electronic`, `bo_curve`, `optimize_geometry`, CLI `gato-h2plus`
+- [x] 11 tests: bond observables, analytic Coulomb force from `jax.grad` on E_nn, K=1 reduction, charge scaling, superposition, differentiability in positions, BO curve has bound minimum, Hellmann–Feynman = finite-difference force, geometry opt lands in $[1.7, 2.3]\,a_0$
 
-**Exit criterion:** recover the $\text{H}_2^+$ equilibrium bond length ($\approx 2.00\,a_0$) by pure gradient descent on the energy. CPU-runnable.
+**Exit criterion met.** Starting from $R = 2.4\,a_0$ on a $56^3$ grid, 30 geometry steps of Adam on the BO energy recover $R_e = 1.9986\,a_0$, within $0.07\%$ of the Burrau 1927 analytic value $1.9972\,a_0$. Total energy $-0.5749\,E_h$ is ~28 mHa above the analytic $-0.6026\,E_h$ — softening-limited, exactly as in Phase 1 §5.5.
 
 ### Phase 3 — Helium via mean-field electronic structure
 
@@ -473,6 +477,8 @@ Phase 1 implementation is **complete end-to-end**.
 | Hydrogen $E_0$ (Lanczos + linear $\epsilon\to 0$ fit, $N=64$) | | $-0.504\,E_h$ | $-0.500$ |
 | Hydrogen $E_0$ (log-radial 1D, pure $-Z/r$, $N=400$) | | $-0.4999997\,E_h$ | $-0.500$ |
 | Hydrogen $E_0$ (log-radial 1D, pure $-Z/r$, $N=800$) | | $-0.4999999\,E_h$ | $-0.500$ |
+| H$_2^+$ bond length $R_e$ (imag-time + geom opt, $56^3$, $L=10$, $O(h^4)$) | | $1.9986\,a_0$ | $1.9972$ |
+| H$_2^+$ total energy at $R_e$ (same run, softened $\varepsilon = h/2$) | | $-0.5749\,E_h$ | $-0.6026$ |
 | Virial ratio $2\langle T\rangle/|\langle V\rangle|$ (96³) | | $0.984$ | $1.000$ |
 | He⁺ $E_0$ (imag-time, $48^3$, $L=6$, $O(h^4)$) | | $-1.900\,E_h$ | $-2.000$ |
 | Li²⁺ $E_0$ (imag-time, $48^3$, $L=4$, $O(h^4)$) | | $-4.275\,E_h$ | $-4.500$ |
@@ -480,4 +486,8 @@ Phase 1 implementation is **complete end-to-end**.
 
 The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 46 tests pass.
 
-Next up: **Phase 2** — $\text{H}_2^+$ with a multi-center Coulomb potential and autodiff-based geometry optimization, as the first taste of real chemistry. Phases 3 and 4 (helium RHF → RHF molecules including H₂O) follow on the local machine. Phase 4 is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; beyond that, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
+**Phase 2 is also complete.** Starting from $R = 2.4\,a_0$ on a $56^3$ grid, 30 Adam steps on the Born–Oppenheimer energy recover the $\text{H}_2^+$ bond length $R_e = 1.9986\,a_0$ — within $0.07\%$ of the Burrau 1927 analytic value $1.9972\,a_0$ — by pure gradient descent. The total energy $-0.5749\,E_h$ is softening-limited (~28 mHa above the analytic $-0.6026\,E_h$), the same $O(\varepsilon)$ bias observed in Phase 1 and closable by the same $\varepsilon \to 0$ extrapolation. All 60 tests pass.
+
+All Phase 1 and Phase 2 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and runs unchanged on GPU via `uv sync --extra gpu`; on an RTX 5070 the same Phase 2 geometry optimization is expected in single-digit seconds rather than minutes.
+
+Next up: **Phase 3** — helium (two electrons, one nucleus) with a self-consistent-field loop, the FFT-based Hartree potential, and exact exchange. This is where the project enters many-electron territory. Phase 4 (RHF on H₂, LiH, H₂O) is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; beyond that, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
