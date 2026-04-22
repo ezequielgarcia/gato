@@ -76,7 +76,7 @@ $$
 The volume element `dV = h³` lets us compute inner products:
 
 $$
-\langle \phi | \psi\rangle = \int \phi^*(\mathbf r)\psi(\mathbf r)\,dV \;\approx\; h^3\sum_{ijk} \phi_{ijk}^*\,\psi_{ijk}.
+\langle \phi | \psi\rangle = \int \phi^{\ast}(\mathbf r)\,\psi(\mathbf r)\,dV \;\approx\; h^3\sum_{ijk} \phi_{ijk}^{\ast}\,\psi_{ijk}.
 $$
 
 This is implemented as `gato.inner_product(phi, psi, grid)`.

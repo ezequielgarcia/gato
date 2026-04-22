@@ -76,7 +76,7 @@ $$
 We take this rule as the *definition* of the discrete inner product,
 
 $$
-\langle \phi | \psi \rangle \;\equiv\; h^3 \sum_{ijk} \phi^*_{ijk}\,\psi_{ijk}, \tag{3}
+\langle \phi | \psi \rangle \;\equiv\; h^3 \sum_{ijk} \phi^{\ast}_{ijk}\,\psi_{ijk}, \tag{3}
 $$
 
 so that inner products and norms are consistent with integration throughout.
