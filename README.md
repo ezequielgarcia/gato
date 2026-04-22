@@ -491,3 +491,9 @@ The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6
 All Phase 1 and Phase 2 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and runs unchanged on GPU via `uv sync --extra gpu`; on an RTX 5070 the same Phase 2 geometry optimization is expected in single-digit seconds rather than minutes.
 
 Next up: **Phase 3** — helium (two electrons, one nucleus) with a self-consistent-field loop, the FFT-based Hartree potential, and exact exchange. This is where the project enters many-electron territory. Phase 4 (RHF on H₂, LiH, H₂O) is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; beyond that, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
+
+---
+
+## 10. Acknowledgements on development workflow
+
+Phases 1 and 2 of GATO — roughly 2,900 lines of code, 60 tests, and the Phase 1 paper — were developed in about half a day of focused work, with Google Gemini and Anthropic's Claude assisting as coding and design collaborators. The LLMs accelerated implementation, test construction, and documentation drafting; the architectural choices, physics interpretation, roadmap scoping, and acceptance criteria remained human-directed throughout. This is a practical example of what the current generation of coding assistants can deliver on a moderately-scoped research codebase when the human provides clear design intent and the tools handle the mechanical work.
