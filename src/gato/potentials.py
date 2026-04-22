@@ -9,6 +9,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from .geometry import Nuclei
 from .grid import Grid3D
 
 
@@ -33,6 +34,31 @@ def softened_coulomb(
     x0, y0, z0 = center
     r2 = (X - x0) ** 2 + (Y - y0) ** 2 + (Z_coord - z0) ** 2
     return -Z / jnp.sqrt(r2 + epsilon * epsilon)
+
+
+def multi_center_softened_coulomb(
+    nuclei: Nuclei,
+    grid: Grid3D,
+    epsilon: float | None = None,
+) -> jax.Array:
+    """Sum of softened Coulomb wells, V(r) = -Σ_k Z_k / sqrt(|r-R_k|² + ε²).
+
+    Fully differentiable in `nuclei.positions` — the potential tracks the
+    nuclei and `jax.grad` flows through it to give the Hellmann-Feynman
+    contribution to the nuclear force.
+    """
+    if epsilon is None:
+        epsilon = grid.h / 2
+    X, Y, Z = grid.coords()
+    grid_pts = jnp.stack([X, Y, Z], axis=-1)  # (N, N, N, 3)
+
+    def one_center(R: jax.Array, Zk: jax.Array) -> jax.Array:
+        diff = grid_pts - R
+        r2 = jnp.sum(diff * diff, axis=-1)
+        return -Zk / jnp.sqrt(r2 + epsilon * epsilon)
+
+    contribs = jax.vmap(one_center)(nuclei.positions, nuclei.charges)
+    return jnp.sum(contribs, axis=0)
 
 
 def harmonic_oscillator(grid: Grid3D, omega: float = 1.0) -> jax.Array:

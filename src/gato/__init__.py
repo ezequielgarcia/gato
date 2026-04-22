@@ -3,6 +3,13 @@ from __future__ import annotations
 
 import jax
 
+from .geometry import (
+    Nuclei,
+    bond_angle,
+    bond_length,
+    nuclear_repulsion,
+    recenter,
+)
 from .grid import Grid3D, inner_product, integrate, norm_sq, normalize
 from .hamiltonian import Hamiltonian
 from .observables import (
@@ -12,11 +19,19 @@ from .observables import (
     virial_ratio,
 )
 from .operators import gradient, kinetic, laplacian
-from .potentials import constant, harmonic_oscillator, softened_coulomb
+from .potentials import (
+    constant,
+    harmonic_oscillator,
+    multi_center_softened_coulomb,
+    softened_coulomb,
+)
 
 __all__ = [
     "Grid3D",
     "Hamiltonian",
+    "Nuclei",
+    "bond_angle",
+    "bond_length",
     "constant",
     "enable_x64",
     "gradient",
@@ -27,10 +42,13 @@ __all__ = [
     "kinetic_energy",
     "laplacian",
     "main",
+    "multi_center_softened_coulomb",
     "norm_sq",
     "normalize",
+    "nuclear_repulsion",
     "potential_energy",
     "radial_density",
+    "recenter",
     "softened_coulomb",
     "virial_ratio",
 ]
