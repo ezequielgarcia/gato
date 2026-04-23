@@ -1,4 +1,4 @@
-# GATO
+# GATO 🐱
 
 **Grid Autodiff Theory of Orbitals**
 
