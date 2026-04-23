@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="docs/figures/gato.png" alt="GATO logo — a cat in superposition with a phase-shifted copy and wave ripples" width="280">
-</p>
-
-# GATO
+<h1>
+  <img src="docs/figures/gato.png" alt="GATO logo — cat in superposition with phase-shifted copy" height="64" align="absmiddle">
+  GATO
+</h1>
 
 **Grid Autodiff Theory of Orbitals**
 
