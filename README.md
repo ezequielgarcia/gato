@@ -320,8 +320,9 @@ Every physical system the project solves, organized by method. The same molecule
 | 4 | LiH | 4 | 2 | RHF + autodiff forces | yes | 5070 |
 | 4 | H₂O | 10 | 3 | RHF, geometry optimization — **project's ab-initio terminal target** | yes | 5070 |
 | 5 | H₂, LiH, H₂O | same as above | same | KS-DFT (LDA), method comparison vs. RHF | no (parameterized XC) | 5070 |
+| 6 | Au⁺, Hg atoms (and optionally Ag, Cu for the light-homolog contrast) | 34, 40 | 1 | scalar-relativistic RHF / ZORA on a log-radial 1D grid | yes | CPU |
 
-**Distinct systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, H₂O.
+**Distinct systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, H₂O, Au⁺ (Hg, Ag, Cu).
 
 **Neural ansätze** (Equinox MLP × Kato cusp) are used alongside grid ansätze throughout, both as a pedagogical tool (Phase 1's hydrogen VQE) and as a viable representation of the self-consistent orbitals inside the Phase 3–5 SCF loops.
 
@@ -431,6 +432,34 @@ What is *not* duplicated between GATO and FermiNet:
 
 This split keeps GATO's scope bounded (3–6 months of work rather than 12+), and leaves the re-implementation of well-solved problems to the teams that have invested years optimizing them.
 
+### Phase 6 — Scalar-relativistic heavy atoms (optional extension)
+
+An optional side-branch beyond the H → H₂O main line, aimed at making the "relativity is visible to the eye" story quantitative. The target audience is the same pedagogical reader as Phase 1: someone who has seen Griffiths but never a relativistic QM treatment of many-electron atoms. Scoped as a one-month extension, strictly smaller than any of Phases 3–5.
+
+**Why it belongs in GATO.** The new physics is two local operators (mass–velocity $-\hat p^4/8 m^3 c^2$ and Darwin $\propto \nabla^2 V$), or equivalently one position-dependent effective mass in the kinetic stencil (ZORA). Both drop into the existing SCF loop by swapping the kinetic operator — no new solver, no new functional, no new geometry machinery. Everything else (Lanczos, Hartree, LDA, `jax.grad`) is re-used unchanged. The correct framing is "GATO with one extra operator", not a new framework.
+
+**Why log-radial, not 3D Cartesian.** At $Z = 79$ the 1s orbital has $\langle r\rangle \sim 1/Z \approx 0.013\,a_0$, far below the $h \approx 0.08\,a_0$ grid spacing used for water. Resolving core electrons on a Cartesian grid would need $N \gtrsim 300$ per axis. Atoms are spherically symmetric, so the natural representation is the log-radial 1D grid already built for `physics/radial_hydrogen.py`: exponential clustering toward the nucleus gives effectively infinite resolution at the core for ~$10^3$ points.
+
+- [ ] `operators.kinetic_zora(psi, V, h, c)` — ZORA kinetic on the log-radial grid, $\hat T = \hat p\,[c^2/(2 m c^2 - V)]\,\hat p$
+- [ ] `operators.kinetic_mv_darwin` — alternative perturbative mass-velocity + Darwin, as a cross-check against ZORA
+- [ ] `functionals.lda_xc_*_radial` — LDA XC adapted to the 1D radial angular integration (trivial factor of $4\pi r^2$)
+- [ ] `scf_rhf_radial` / `scf_ks_lda_radial` — radial analogues of the Phase 3 SCF loops, with a spherical Hartree kernel (1D radial Poisson, $O(N)$)
+- [ ] Core-valence partitioning: occupy shells by Aufbau, not by Lanczos on a single Krylov run (shell structure is explicit in 1D radial)
+- [ ] `physics/gold.py` — end-to-end driver for Au⁺ ($5d^{10}$, $n_{\rm occ} = 34$) and Hg ($5d^{10}\,6s^2$, $n_{\rm occ} = 40$), running NR and scalar-relativistic side by side
+- [ ] Light-homolog contrast: Cu (3d¹⁰) and Ag (4d¹⁰) — both closed-shell one-column-above relatives of Au⁺, both predicted to show *smaller* relativistic contraction since $Z\alpha$ is smaller; demonstrates the $\sim Z^2$ scaling of the correction
+
+**The demo.** Same SCF stack, two kinetic operators, one plot:
+
+| Quantity | NR | Scalar-rel | Experimental trend |
+|----------|------|------------|---------------------|
+| Au⁺ 6s orbital energy | ~$-0.29\,E_h$ | ~$-0.38\,E_h$ | 6s contraction — $\sim 20\%$ deeper binding |
+| Au⁺ 5d → 6s gap | UV | visible blue | "gold is yellow" |
+| $\langle r\rangle_{6s}$(Hg) / $\langle r\rangle_{6s}$(Cd) | ratio $\approx 1$ | ratio $< 1$ | Hg's unusual volatility / liquid-at-RT behavior |
+
+**Exit criterion.** Scalar-relativistic Au⁺ 6s orbital energy within $1\%$ of the published all-electron scalar-relativistic DFT reference [Desclaux 1973], and the 5d→6s gap reduction from NR to scalar-rel reproduced to within a few hundred meV. No molecular geometry, no spin-orbit, no two-component spinors — those would be a separate Phase 7 and are not planned.
+
+**What Phase 6 deliberately does not cover.** Full two-component spin-orbit (needs doubled array shapes and a rewritten stencil), the Dirac equation proper (four-component, $Z_{\rm crit} = 1/\alpha$ issues), and any molecular geometry at $Z > 20$. Readers who need those should use DIRAC, ReSpect, or ADF — GATO's scope ends at "the cheapest relativistic correction that makes the textbook story quantitative."
+
 ---
 
 ## 6. Dependencies per phase
@@ -444,6 +473,7 @@ The package stays pure-Python, pure-JAX throughout. No new runtime dependencies 
 | 3 (helium RHF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; exact exchange is a 3D Poisson solve |
 | 4 (RHF molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf only for cross-validating against a trusted reference |
 | 5 (LDA molecules) | local 5070 | none | none (reuse pyscf for comparison) | LDA is ~10 lines of point-wise math; reuses the Phase 4 SCF loop |
+| 6 (scalar-rel heavy atoms, optional) | laptop CPU | none | none | one extra kinetic operator on the existing log-radial grid |
 | any, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
 
 For correlated many-body wavefunctions, use [FermiNet](https://github.com/google-deepmind/ferminet) directly — it ships its own JAX dependency set that coexists with GATO's.
