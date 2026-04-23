@@ -9,6 +9,8 @@ docs_dir: docs
 
 theme:
   name: material
+  logo: figures/gato.png
+  favicon: figures/gato.png
   features:
     - navigation.instant
     - navigation.tracking

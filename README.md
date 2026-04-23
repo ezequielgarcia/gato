@@ -1,4 +1,8 @@
-# GATO 🐱
+<p align="center">
+  <img src="docs/figures/gato.png" alt="GATO logo — a cat in superposition with a phase-shifted copy and wave ripples" width="280">
+</p>
+
+# GATO
 
 **Grid Autodiff Theory of Orbitals**
 
