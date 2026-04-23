@@ -370,13 +370,28 @@ First taste of chemistry. A stepping stone that introduces two ideas needed for 
 
 Enter many-electron land on the simplest closed-shell atom. Single nucleus, two electrons, no molecular geometry yet — the focus is on getting self-consistency right.
 
-- [ ] `scf.py` — self-consistent-field loop with `jax.lax.while_loop`
-- [ ] `functionals.py` — LDA exchange-correlation (and later PBE)
-- [ ] Hartree potential $J(\mathbf r) = \int \rho(\mathbf r')/|\mathbf r - \mathbf r'|\,dV'$ via 3D FFT convolution
-- [ ] Restricted Hartree–Fock with doubly-occupied orbital
-- [ ] Kohn–Sham DFT with LDA
+- [x] Hartree potential $J(\mathbf r) = \int \rho(\mathbf r')/|\mathbf r - \mathbf r'|\,dV'$ via 3D FFT convolution on a doubled grid (Hockney/Eastwood method)
+- [x] `scf.py` — self-consistent-field loop, matrix-free Fock with a general $n_\text{orb}^2$ exchange operator and linear density mixing
+- [x] Restricted Hartree–Fock with doubly-occupied orbital (helium, N=64 L=10 grid, converges in ~6 iterations)
+- [x] `functionals.py` — LDA exchange (Dirac) + correlation (Perdew–Zunger 1981); unpolarized, with variational-consistency and branch-continuity tests
+- [x] Kohn–Sham DFT with LDA — `scf_ks_lda` driver, purely local $V_\text{eff} = V_\text{ext} + V_H + V_\text{xc}$ (no exchange operator, no per-pair Poisson solves)
+- [ ] **Accuracy work — softening residual:** hit the 1 mHa exit criterion; see note below.
 
 **Exit criterion:** helium ground-state energy within chemical accuracy ($\sim 1$ mHa) of reference values ($-2.862\,E_h$ RHF, $-2.834\,E_h$ LDA, $-2.9037\,E_h$ exact).
+
+**Known accuracy gap.** With both $V_\text{ext}$ and the Hartree/exchange kernel softened by $\varepsilon = h/2$ (the Phase-1 convention), the helium RHF result currently sits near $-2.60\,E_h$ on an $N=64,\ L=10$ grid — the SCF solves the *softened* Hamiltonian to high fidelity, but the softened Hamiltonian itself is $\sim\!260$ mHa above the true RHF answer for this particular problem. The error is dominated by the nuclear cusp: at $Z=2$ the orbital is tight enough that the region $r \lesssim \varepsilon$ carries non-negligible probability, and the same softening on the $1/r$ kernel biases the two-electron terms in the same direction. Hydrogen at $Z=1$ is much more forgiving and closed to $<1\%$ by the Phase-1 $\varepsilon \to 0$ linear extrapolation; helium's tighter orbital and compounded kernel softening need more. Two routes are on the table for closing this gap, to be decided when the SCF stack is feature-complete:
+
+1. **$\varepsilon \to 0$ extrapolation** — a direct port of the Phase 1 trick: run the full SCF at three softening values and linearly extrapolate $E(\varepsilon)$ to $\varepsilon = 0$. Cheap, adds no new code.
+2. **Origin-regularized Hartree kernel** — replace the softened $1/\sqrt{r^2 + \varepsilon^2}$ convolution kernel with exact $1/r$ everywhere except the origin, where the singular value is replaced by the self-energy of a uniform cube of side $h$ (a standard plane-wave trick). Removes the kernel-side softening entirely, leaving only $V_\text{ext}$ to be cleaned up separately by route 1.
+
+This note exists because the gap is systematic, not a bug — and because the same effect will recur at $Z=8$ (oxygen) in Phase 4.
+
+**Additional atom benchmarks (planned, GPU-gated).** He alone validates the $n_\text{orb}=1$ path. Two more closed-shell atoms fill in the coverage before jumping to molecules:
+
+- **Be** ($Z=4$, $1s^2\,2s^2$, $n_\text{occ}=2$) — exercises the general $n_\text{orb}^2$ exchange operator with two orbitals of the same angular momentum. Reference RHF: $-14.573\,E_h$.
+- **Ne** ($Z=10$, $1s^2\,2s^2\,2p^6$, $n_\text{occ}=5$) — first p-orbital occupancy; exercises the symmetry-breaking perturbation in the default initial guess (a purely spherical starter would leave the three 2p's invisible to Lanczos). Reference RHF: $-128.547\,E_h$. These orbital counts also match the Phase 4 molecular targets: H₂ is $n_\text{occ}=1$ like He, LiH is $n_\text{occ}=2$ like Be, H₂O is $n_\text{occ}=5$ like Ne — so the atoms isolate SCF machinery from geometry optimization debugging.
+
+Test stubs exist in `tests/test_scf.py::test_beryllium_rhf_converges` and `::test_neon_rhf_converges`, currently `@pytest.mark.skip`'d because each takes ~30 min (Be) to multi-hour (Ne) on CPU. They'll be enabled once the GPU backend (`uv sync --extra gpu`) is in use, where they should drop to seconds / minute respectively.
 
 ### Phase 4 — Restricted Hartree–Fock molecules (ab-initio terminal target)
 
