@@ -6,9 +6,28 @@
 > GitHub's markdown viewer mangles display-math spacing and some macros — prefer the site for the phase notes.
 
 
-A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends. The trajectory goes hydrogen → $\text{H}_2^+$ → helium → **restricted Hartree–Fock** on H₂, LiH, and H₂O with geometry optimization (Phase 4, the project's **ab-initio terminal target**), followed by an explicitly-parameterized **DFT-LDA** pass on the same molecules for method comparison (Phase 5). Single-particle *neural* ansätze (Equinox MLP × exact Kato cusp) are used alongside grid ansätze throughout — pedagogically from Phase 1 and as representations of the self-consistent orbitals in Phases 3–5. GATO intentionally **stops short of the many-body Slater-backflow neural VMC regime** that is already handled at production quality by [DeepMind's FermiNet](https://github.com/google-deepmind/ferminet) (also a JAX codebase, trivially composable with GATO). The whole pipeline stays differentiable, matrix-free, and memory-efficient, with molecular geometry obtained from first principles by gradient descent on the energy. Development and production run on a single consumer GPU (RTX 5070); no cloud compute or HPC allocation is required.
+A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends.
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
+
+---
+
+## 0. What GATO is
+
+GATO solves the electronic Schrödinger equation for atoms and molecules, from first principles, on a computer.
+
+Given a set of atomic nuclei — their positions and their charges — GATO computes the **ground-state wavefunction and energy** of the electrons that surround them. From that wavefunction it derives everything downstream: electron density, orbital shapes, bond lengths, bond angles, and the forces that hold the molecule together.
+
+Concretely, the code:
+
+- **Represents the wavefunction on a three-dimensional grid.** The cube of space around the molecule is sampled at evenly spaced points, and the value of the electronic wavefunction is stored at every point. No Gaussian basis sets, no atomic orbitals — just numbers on a lattice.
+- **Builds the Hamiltonian as an operator, not a matrix.** Kinetic energy is a seven-point finite-difference stencil acting on neighbouring grid values; the nuclear potential is a pointwise multiplication; electron–electron repulsion is a 3D Fourier-transform convolution. Nothing is ever assembled into a dense $N^3 \times N^3$ matrix.
+- **Finds the ground state by variational optimization.** The wavefunction is treated as a differentiable parameter; the energy is a scalar function of those parameters; gradient-based optimizers (imaginary-time propagation, Rayleigh-quotient descent, Lanczos diagonalization) drive the energy to its minimum.
+- **Finds molecular geometry the same way.** Nuclear positions are also differentiable parameters. `jax.grad` applied to the total energy returns the forces on the nuclei; Adam on those forces relaxes the molecule to its equilibrium geometry.
+- **Handles many-electron systems self-consistently.** For atoms and molecules with more than one electron, GATO runs a self-consistent-field loop (Hartree–Fock or Kohn–Sham DFT): the effective potential felt by each electron depends on the density of all the others, and the loop iterates until the wavefunction and the potential it generates agree.
+- **Delivers physically meaningful numbers.** Bond lengths, bond angles, total energies, virial ratios, orbital energies, radial densities — the observables a chemist or spectroscopist would actually ask about.
+
+The end-to-end pipeline is pure [JAX](https://jax.readthedocs.io/): differentiable, JIT-compiled to XLA, and runs identically on CPU or on a single consumer-grade NVIDIA GPU. The target progression is hydrogen → $\text{H}_2^+$ → helium → restricted Hartree–Fock and Kohn–Sham DFT on H₂, LiH, and H₂O, with molecular geometries obtained by gradient descent on the total energy. An optional side-branch extends the same machinery to heavy atoms (Au⁺, Hg) using a scalar-relativistic kinetic operator.
 
 ---
 
