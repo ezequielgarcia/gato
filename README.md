@@ -12,6 +12,31 @@ This README is meant to be readable by a physics student who has seen Griffiths'
 
 ---
 
+## Contents
+
+- [§0 What GATO is](#0-what-gato-is)
+- [§1 Motivation](#1-motivation)
+- [§2 Physics background](#2-physics-background)
+- [§3 What's implemented](#3-whats-implemented-phase-1-so-far)
+- [§4 Installation and development](#4-installation-and-development)
+- [§5 Roadmap](#5-roadmap)
+  - [§5.0 Systems at a glance](#50-systems-at-a-glance)
+  - [Phase 1 — Hydrogen *(complete)*](#phase-1-differentiable-hydrogen-atom-complete)
+  - [Phase 2 — H₂⁺ *(complete)*](#phase-2-multi-nucleus-single-electron-texth_2-complete)
+  - [Phase 3 — Helium SCF *(complete)*](#phase-3-helium-via-mean-field-electronic-structure)
+  - [Phase 4 — RHF on H₂, LiH, H₂O](#phase-4-restricted-hartreefock-molecules-ab-initio-terminal-target)
+  - [Phase 5 — DFT (LDA + PBE)](#phase-5-kohnsham-dft-parameterized-extension-lda-and-pbe)
+  - [§5.6 Beyond Phase 5 — FermiNet handoff](#56-beyond-phase-5-handing-off-to-ferminet)
+  - [Phase 6 — Atomic absorption spectra](#phase-6-atomic-absorption-spectra-observable-extraction-layer)
+  - [Phase 7 — Scalar-relativistic heavy atoms *(optional)*](#phase-7-scalar-relativistic-heavy-atoms-optional-extension)
+- [§6 Dependencies per phase](#6-dependencies-per-phase)
+- [§7 Design principles](#7-design-principles)
+- [§8 References](#8-references)
+- [§9 Status](#9-status)
+- [§10 Acknowledgements](#10-acknowledgements-on-development-workflow)
+
+---
+
 ## 0. What GATO is
 
 GATO solves the electronic Schrödinger equation for atoms and molecules, from first principles, on a computer.
