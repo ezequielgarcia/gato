@@ -327,7 +327,7 @@ Tests enable this automatically via `tests/conftest.py`.
 
 ### 5.0 Systems at a glance
 
-Every physical system the project solves, organized by method. The same molecules (H₂, LiH, H₂O) appear at both RHF (Phase 4) and LDA (Phase 5) so the two methods can be compared on identical geometries; the ab-initio terminal result lives at Phase 4.
+Every physical system the project solves, organized by method. The same molecules (H₂, LiH, H₂O) appear at RHF (Phase 4) and at two DFT functional rungs — LDA and PBE (Phase 5) — so three methods can be compared on identical geometries; the ab-initio terminal result lives at Phase 4.
 
 | Phase | System | $n_e$ | Nuclei | Method | Ab initio? | Hardware |
 |-------|--------|-------|--------|--------|-----------|----------|
@@ -338,7 +338,7 @@ Every physical system the project solves, organized by method. The same molecule
 | 4 | H₂ | 2 | 2 | RHF + autodiff forces | yes | 5070 |
 | 4 | LiH | 4 | 2 | RHF + autodiff forces | yes | 5070 |
 | 4 | H₂O | 10 | 3 | RHF, geometry optimization — **project's ab-initio terminal target** | yes | 5070 |
-| 5 | H₂, LiH, H₂O | same as above | same | KS-DFT (LDA), method comparison vs. RHF | no (parameterized XC) | 5070 |
+| 5 | H₂, LiH, H₂O | same as above | same | KS-DFT (LDA rung-1, PBE rung-2 GGA), method comparison vs. RHF | no (parameterized XC) | 5070 |
 | 6 | H, He, Be, Ne (and Na, Hg vapor if Phase 7 is done) | same atoms as above | 1 | atomic absorption spectra from excited-state Lanczos + transition dipoles | yes | CPU |
 | 7 | Au⁺, Hg (and optionally Ag, Cu for the light-homolog contrast) | 34, 40 | 1 | scalar-relativistic RHF / ZORA on a log-radial 1D grid, plus Phase 6 spectra on top | yes | CPU |
 
@@ -346,7 +346,7 @@ Every physical system the project solves, organized by method. The same molecule
 
 **Neural ansätze** (Equinox MLP × Kato cusp) are used alongside grid ansätze throughout, both as a pedagogical tool (Phase 1's hydrogen VQE) and as a viable representation of the self-consistent orbitals inside the Phase 3–5 SCF loops.
 
-**Ab-initio boundary.** Phase 4 (restricted Hartree–Fock) is the strictly-ab-initio terminal result: one Slater determinant, exact electron–electron Coulomb and exchange, no empirical or numerically-fit parameters anywhere. Phase 5 (Kohn–Sham DFT with the LDA functional) is an explicitly-parameterized extension: the LDA exchange-correlation functional is numerically fit to quantum Monte Carlo data for the homogeneous electron gas [Ceperley–Alder 1980, Perdew–Zunger 1981], so the method carries reference-calculation parameters. It's included because LDA often gives more *accurate* geometries than RHF despite being less *principled* — a pedagogically important contrast. Beyond Phase 5, correlated many-body wavefunctions are handled by FermiNet (see §5.6).
+**Ab-initio boundary.** Phase 4 (restricted Hartree–Fock) is the strictly-ab-initio terminal result: one Slater determinant, exact electron–electron Coulomb and exchange, no empirical or numerically-fit parameters anywhere. Phase 5 (Kohn–Sham DFT, both LDA and PBE) is an explicitly-parameterized extension: the LDA exchange-correlation functional is numerically fit to quantum Monte Carlo data for the homogeneous electron gas [Ceperley–Alder 1980, Perdew–Zunger 1981], and the PBE GGA [Perdew–Burke–Ernzerhof 1996] is non-empirical but constrained by sum-rules and bounds chosen with some empirical input. Phase 5 is included because DFT functionals often give more *accurate* geometries and energies than RHF despite being less *principled*, and because PBE specifically is the workhorse of production materials and chemistry codes — a pedagogically important contrast with both RHF and LDA. Beyond Phase 5, correlated many-body wavefunctions are handled by FermiNet (see §5.6).
 
 ### Phase 1 — Differentiable Hydrogen Atom *(complete)*
 
@@ -425,18 +425,27 @@ Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) into *str
 
 **Exit criterion (project's ab-initio terminal target):** H₂O geometry recovered at the RHF level consistent with published RHF reference values (angle $\approx 106°$, $d_{\text{OH}} \approx 1.78\,a_0$). Energy within a few mHa of reference RHF. The systematic $\sim\!1.5°$ overestimate of the bond angle vs. experiment is a known RHF limitation — fixing it requires either a parameterized functional (Phase 5) or correlated wavefunctions (FermiNet, §5.6).
 
-### Phase 5 — Kohn–Sham DFT with LDA (parameterized extension)
+### Phase 5 — Kohn–Sham DFT (parameterized extension: LDA and PBE)
 
-Same SCF framework as Phase 4, with the exact exchange operator $\hat K$ swapped for a Kohn–Sham exchange-correlation functional — specifically the local-density approximation (LDA) with the Perdew–Zunger parameterization of the Ceperley–Alder homogeneous-electron-gas QMC data. This phase is **explicitly not ab initio** in the strict sense: the LDA XC functional has numerical parameters fit to reference calculations. It is included for two reasons:
+Same SCF framework as Phase 4, with the exact exchange operator $\hat K$ swapped for a Kohn–Sham exchange–correlation functional. Two functionals are implemented side by side so the phase tells a pedagogical story about Jacob's ladder of DFT functionals:
 
-1. **Method-comparison.** LDA on H₂O gives a bond angle of $\approx 104.5°$ — closer to experiment than RHF. Running the same geometries through both methods (and optionally through FermiNet later) is the cleanest demonstration of the parameterized-vs-ab-initio-vs-correlated tradeoff.
-2. **Minimal marginal code.** Once the SCF loop of Phase 4 exists, the only new code is the LDA exchange-correlation functional itself — a ~10-line point-wise function of the local density $\rho(\mathbf r)$.
+1. **LDA (rung 1, local).** Dirac exchange + Perdew–Zunger 1981 correlation, fit to Ceperley–Alder 1980 QMC data for the homogeneous electron gas. Depends on $\rho(\mathbf r)$ only. Already written and tested on He in Phase 3.
+2. **PBE (rung 2, semi-local / GGA).** Perdew–Burke–Ernzerhof 1996. Depends on $\rho(\mathbf r)$ *and* $|\nabla\rho(\mathbf r)|$ — adds a gradient-dependent enhancement factor $F_x(s)$ to the LDA exchange and a gradient-corrected $H(r_s, t)$ to LDA correlation. Non-empirical: the parameters are fixed by mathematical constraints (Lieb–Oxford bound, correct uniform-gas limit, correct slowly-varying limit), not by fits to reference calculations.
 
-- [ ] `functionals.py` — LDA exchange (Dirac) and correlation (Perdew–Zunger 1981)
-- [ ] Swap `Fock.exact_exchange` for `ks.V_xc[rho]` in the Phase-4 SCF loop
-- [ ] Re-run H₂, LiH, H₂O at the LDA level; compare geometries and energies directly to the Phase 4 RHF numbers
+The phase is **explicitly not ab initio**: both functionals are either parameterized to external data (LDA) or constrained to satisfy sum-rules chosen with some empirical input (PBE). It is included for three reasons:
 
-**Exit criterion:** H₂O bond angle within $1°$ of experimental $104.5°$ at the LDA level; same for bond length within $0.02\,a_0$ of experimental. Numbers must match published DFT-LDA reference values.
+1. **Method comparison.** On H₂O, LDA gives bond angle $\approx 104.4°$ and PBE gives $\approx 104.2°$, both closer to the experimental $104.5°$ than RHF's $\approx 106°$. PBE also fixes LDA's systematic atomization-energy overbinding (LDA gets H₂O's atomization energy ~15% too high; PBE gets it right). Running the same H₂O geometry through RHF, LDA, and PBE on identical grids is the cleanest demonstration of the principled-vs-parameterized-vs-gradient-corrected tradeoff.
+2. **Real DFT, not toy DFT.** PBE is the default functional in VASP, Quantum ESPRESSO, and most plane-wave production codes. Having it in GATO means the codebase is literate about the functional form people actually use, not just the textbook simplest one.
+3. **Minimal marginal code.** LDA adds ~100 lines on top of the Phase 4 SCF loop (already written). PBE adds another ~80 lines on top of LDA — one density gradient, one enhancement factor, one closed-form correlation correction, all differentiable via `jax.grad` so $V_\text{xc} = \delta E_\text{xc}/\delta\rho$ is automatic. Computational overhead over LDA is ~15 % on CPU, essentially zero on GPU.
+
+- [x] `functionals.py` — LDA exchange (Dirac) and correlation (Perdew–Zunger 1981) *(delivered in Phase 3)*
+- [ ] `functionals.py` — PBE exchange ($\rho^{4/3} F_x(s)$ with Perdew–Burke–Ernzerhof 1996 enhancement factor)
+- [ ] `functionals.py` — PBE correlation (PW92 local piece plus the gradient-dependent $H$ term)
+- [ ] Variational-consistency cross-check for PBE: `jax.grad(E_xc)(ρ)/dV` = the hand-derived $V_\text{xc}$ including the $-\nabla\cdot(\partial\epsilon_\text{xc}/\partial\nabla\rho)$ divergence piece. Same test pattern as the Phase-3 LDA tests, extended to GGA.
+- [ ] Swap `Fock.exact_exchange` for `ks.V_xc[rho]` in the Phase-4 SCF loop; make the functional choice a parameter so LDA and PBE share a single driver
+- [ ] Re-run H₂, LiH, H₂O at the LDA and PBE level; compare geometries and energies directly to the Phase 4 RHF numbers
+
+**Exit criterion.** H₂O bond angle within $1°$ of experimental $104.5°$ at both the LDA and PBE levels. Bond length within $0.02\,a_0$ of experimental. PBE atomization energy within $\sim 0.3\,$eV of experiment (a well-known PBE-accuracy benchmark). Numbers must agree with published DFT-LDA and DFT-PBE reference values (e.g. NIST CCCBDB).
 
 ### 5.6 Beyond Phase 5: handing off to FermiNet
 
@@ -511,7 +520,7 @@ The package stays pure-Python, pure-JAX throughout. No new runtime dependencies 
 | 2 (H₂⁺) | laptop CPU | none | none | multi-center potential + autodiff forces only |
 | 3 (helium RHF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; exact exchange is a 3D Poisson solve |
 | 4 (RHF molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf only for cross-validating against a trusted reference |
-| 5 (LDA molecules) | local 5070 | none | none (reuse pyscf for comparison) | LDA is ~10 lines of point-wise math; reuses the Phase 4 SCF loop |
+| 5 (LDA + PBE molecules) | local 5070 | none | none (reuse pyscf for comparison) | LDA already in place from Phase 3; PBE adds ~80 lines of gradient-dependent math, reuses the Phase 4 SCF loop unchanged |
 | 6 (atomic spectra) | laptop CPU | none | none | Lanczos (present) + one dipole integral, no new infrastructure |
 | 7 (scalar-rel heavy atoms, optional) | laptop CPU | none | none | one extra kinetic operator on the existing log-radial grid |
 | any, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
@@ -543,6 +552,8 @@ What's **not** needed:
 - Szabo & Ostlund, *Modern Quantum Chemistry*, Dover — Hartree–Fock, configuration interaction, and the SCF loop.
 - Ceperley, D. M. & Alder, B. J. (1980), "Ground state of the electron gas by a stochastic method", *Physical Review Letters* **45**, 566 — the homogeneous-electron-gas QMC data that LDA is fit to.
 - Perdew, J. P. & Zunger, A. (1981), "Self-interaction correction to density-functional approximations for many-electron systems", *Physical Review B* **23**, 5048 — the LDA parameterization used in Phase 5.
+- Perdew, J. P., Burke, K. & Ernzerhof, M. (1996), "Generalized Gradient Approximation Made Simple", *Physical Review Letters* **77**, 3865 — the PBE GGA exchange–correlation functional used in Phase 5 alongside LDA.
+- Perdew, J. P. & Schmidt, K. (2001), "Jacob's ladder of density functional approximations for the exchange-correlation energy", *AIP Conf. Proc.* **577**, 1 — the local → GGA → meta-GGA → hybrid → RPA hierarchy that situates LDA and PBE within the broader family of DFT functionals.
 - Kato, T. (1957), "On the eigenfunctions of many-particle systems in quantum mechanics", *Communications on Pure and Applied Mathematics* **10**, 151–177 — the nuclear- and electron-coalescence cusp conditions encoded into the neural ansatz.
 - Peruzzo et al. (2014), "A variational eigenvalue solver on a photonic quantum processor" — the original VQE paper.
 - Pfau et al. (2020), "Ab initio solution of the many-electron Schrödinger equation with deep neural networks" — FermiNet, the blueprint for Phase 5.
