@@ -1,7 +1,4 @@
-<h1>
-  <img src="docs/figures/gato.png" alt="GATO logo — cat in superposition with phase-shifted copy" height="64" align="absmiddle">
-  GATO
-</h1>
+# <img src="docs/figures/gato.png" alt="GATO logo" height="56"> GATO
 
 **Grid Autodiff Theory of Orbitals**
 
