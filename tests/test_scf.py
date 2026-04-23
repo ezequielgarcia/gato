@@ -17,6 +17,8 @@ The checks here span three levels:
     enforces the weaker "convergence behaviour is correct" bound; the tight
     energy target is deferred to a dedicated benchmark.
 """
+import os
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -25,6 +27,11 @@ from gato.grid import Grid3D, inner_product, normalize
 from gato.potentials import softened_coulomb
 from gato.scf import _MixedFock, exchange_apply, rhf_energy, scf_ks_lda, scf_rhf
 from gato.solvers.poisson import hartree_potential
+
+gpu_only = pytest.mark.skipif(
+    not os.environ.get("GATO_GPU"),
+    reason="set GATO_GPU=1 on a CUDA box to run the multi-orbital atom benchmarks",
+)
 
 
 def _normalized_gaussian(grid: Grid3D, alpha: float) -> jnp.ndarray:
@@ -168,7 +175,7 @@ def test_helium_ks_lda_converges():
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="GPU-only: slow on CPU (~30 min for Be, much more for Ne)")
+@gpu_only
 def test_beryllium_rhf_converges():
     """Be (Z=4, 1s² 2s²): first multi-orbital closed-shell atom.
 
@@ -188,7 +195,7 @@ def test_beryllium_rhf_converges():
     assert -14.6 < result.energy < -12.0
 
 
-@pytest.mark.skip(reason="GPU-only: slow on CPU (hours at N=80 with n_occ=5)")
+@gpu_only
 def test_neon_rhf_converges():
     """Ne (Z=10, 1s² 2s² 2p⁶): first atom requiring p-orbital occupancy.
 

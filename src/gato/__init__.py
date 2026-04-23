@@ -1,4 +1,4 @@
-"""NEPTUNE-Q: differentiable 3D Schrödinger solvers in JAX."""
+"""GATO — Grid Autodiff Theory of Orbitals: differentiable 3D Schrödinger solvers in JAX."""
 from __future__ import annotations
 
 import jax
@@ -60,12 +60,25 @@ def enable_x64() -> None:
 
 
 def main() -> None:
-    """Environment smoke test."""
+    """Environment smoke test.
+
+    Prints JAX version, the backend in use (CPU / GPU / TPU), the list of
+    visible devices, and recovers the kinetic energy of a unit Gaussian
+    against its analytic value 3/4.
+    """
     enable_x64()
     import jax.numpy as jnp
 
+    backend = jax.default_backend()
+    devices = jax.devices()
     print(f"jax      : {jax.__version__}")
-    print(f"devices  : {jax.devices()}")
+    print(f"backend  : {backend.upper()}")
+    print(f"devices  : {devices}")
+    if backend == "cpu":
+        print(
+            "         (running on CPU — for Phase 3+ workloads install the GPU "
+            "extras via `uv sync --extra gpu` on a CUDA 12 box)"
+        )
     grid = Grid3D(N=32, L=10.0)
     print(f"grid     : N={grid.N}, L={grid.L}, h={grid.h:.4g}, dV={grid.dV:.4g}")
     X, Y, Z = grid.coords()

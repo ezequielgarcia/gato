@@ -330,10 +330,14 @@ uv run gato-hydrogen # full hydrogen benchmark
 On a GPU box, add the CUDA extras:
 
 ```bash
-uv sync --extra gpu  # pulls jax[cuda12] wheels (~2 GB of NVIDIA libraries)
+uv sync --extra gpu          # pulls jax[cuda12] wheels (~2 GB of NVIDIA libraries)
+uv run gato                  # should now print "backend  : GPU" and list the device
+GATO_GPU=1 uv run pytest     # also runs the Be / Ne atom benchmarks (n_occ = 2 and 5)
 ```
 
-No system CUDA install is needed — `jax[cuda12]` bundles its own CUDA 12 + cuDNN. An NVIDIA driver version 525+ is enough.
+No system CUDA install is needed — `jax[cuda12]` bundles its own CUDA 12 + cuDNN. An NVIDIA driver version 525+ is enough. JAX 0.10 supports up to Blackwell (RTX 50-series) out of the box.
+
+The `GATO_GPU=1` environment variable unskips two test stubs in `tests/test_scf.py` (beryllium and neon RHF) that are an order of magnitude too slow on CPU but routine on a recent GPU. Everything else runs on CPU or GPU with no code changes.
 
 ### 4.3 Double precision
 
