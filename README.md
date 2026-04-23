@@ -339,9 +339,10 @@ Every physical system the project solves, organized by method. The same molecule
 | 4 | LiH | 4 | 2 | RHF + autodiff forces | yes | 5070 |
 | 4 | H₂O | 10 | 3 | RHF, geometry optimization — **project's ab-initio terminal target** | yes | 5070 |
 | 5 | H₂, LiH, H₂O | same as above | same | KS-DFT (LDA), method comparison vs. RHF | no (parameterized XC) | 5070 |
-| 6 | Au⁺, Hg atoms (and optionally Ag, Cu for the light-homolog contrast) | 34, 40 | 1 | scalar-relativistic RHF / ZORA on a log-radial 1D grid | yes | CPU |
+| 6 | H, He, Be, Ne (and Na, Hg vapor if Phase 7 is done) | same atoms as above | 1 | atomic absorption spectra from excited-state Lanczos + transition dipoles | yes | CPU |
+| 7 | Au⁺, Hg (and optionally Ag, Cu for the light-homolog contrast) | 34, 40 | 1 | scalar-relativistic RHF / ZORA on a log-radial 1D grid, plus Phase 6 spectra on top | yes | CPU |
 
-**Distinct systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, H₂O, Au⁺ (Hg, Ag, Cu).
+**Distinct systems:** H, He⁺, Li²⁺, He, $\text{H}_2^+$, H₂, LiH, H₂O, Be, Ne, Au⁺, Hg (Ag, Cu).
 
 **Neural ansätze** (Equinox MLP × Kato cusp) are used alongside grid ansätze throughout, both as a pedagogical tool (Phase 1's hydrogen VQE) and as a viable representation of the self-consistent orbitals inside the Phase 3–5 SCF loops.
 
@@ -451,11 +452,32 @@ What is *not* duplicated between GATO and FermiNet:
 
 This split keeps GATO's scope bounded (3–6 months of work rather than 12+), and leaves the re-implementation of well-solved problems to the teams that have invested years optimizing them.
 
-### Phase 6 — Scalar-relativistic heavy atoms (optional extension)
+### Phase 6 — Atomic absorption spectra (observable-extraction layer)
 
-An optional side-branch beyond the H → H₂O main line, aimed at making the "relativity is visible to the eye" story quantitative. The target audience is the same pedagogical reader as Phase 1: someone who has seen Griffiths but never a relativistic QM treatment of many-electron atoms. Scoped as a one-month extension, strictly smaller than any of Phases 3–5.
+The first phase that goes *beyond ground states*. Phases 1–5 compute $E_0$ and $\psi_0$; Phase 6 computes excited states and the transition dipole moments between them, giving quantitative atomic absorption spectra — the kind of data a spectroscopist would actually ask for. Pedagogical payoff: explain the color of a neon sign, the yellow of a sodium street lamp, the blue-green of mercury-vapor fluorescent tubes, and the Balmer series of hydrogen, all from the same ab-initio atomic Hamiltonian. Scoped as a ~2-week extension — essentially no new infrastructure, just a new wiring of what is already there.
 
-**Why it belongs in GATO.** The new physics is two local operators (mass–velocity $-\hat p^4/8 m^3 c^2$ and Darwin $\propto \nabla^2 V$), or equivalently one position-dependent effective mass in the kinetic stencil (ZORA). Both drop into the existing SCF loop by swapping the kinetic operator — no new solver, no new functional, no new geometry machinery. Everything else (Lanczos, Hartree, LDA, `jax.grad`) is re-used unchanged. The correct framing is "GATO with one extra operator", not a new framework.
+**Why it belongs here.** The Lanczos solver from Phase 1 already returns the lowest $K$ eigenpairs of any matrix-free Hermitian operator. Phases 1–5 used only the ground state; Phase 6 uses the rest. The transition dipole moment $\mu_{0\to e} = \langle\psi_e | \hat{\mathbf r} | \psi_0\rangle$ is one grid integration once both states are on the grid. Selection rules are not postulated; they emerge as parity and Wigner–Eckart statements about which dipole integrals vanish by symmetry. Natural (lifetime) linewidths are computed from the Einstein $A$ coefficient, which is another closed-form function of the same $\mu$. All of this is a few hundred lines on top of the Phase 3 / Phase 5 atomic solvers.
+
+- [ ] `spectra.excited_states_lanczos` — return the lowest $K$ eigenpairs of the (Fock or KS) Hamiltonian, reusing the Phase 1 solver with $K > 1$
+- [ ] `spectra.transition_dipole(psi_0, psi_e, grid)` — compute $\boldsymbol{\mu}_{0 \to e} = \int \psi_e^{\ast}\,\mathbf r\,\psi_0\,dV$, returning a 3-vector per pair
+- [ ] `spectra.oscillator_strength(omega, mu)` — the standard $f_{0\to e} = (2/3)\,m_e\,\omega_{e0}\,|\mu|^2/\hbar$
+- [ ] `spectra.einstein_A(omega, mu)` — natural emission rate $A = (4\omega^3 / 3\hbar c^3)\,|\mu|^2$, gives the natural linewidth $\Gamma_{\rm nat} = \hbar A$
+- [ ] `spectra.absorption_cross_section(omega, lines, broadening)` — Lorentzian (natural) + Gaussian (Doppler, $T$-dependent) broadening, returning $\sigma(\omega)$ as a stick spectrum or smooth curve
+- [ ] `physics/atomic_spectra.py` — end-to-end driver producing NIST-comparable tables and plots for H, He, Be, Ne
+- [ ] Demos: Balmer series ($n=3,4,5 \to n=2$); He $1s^2\to 1s2s$ and $1s^2\to 1s2p$; Be $2s^2\to 2s2p$; Ne $2p^6\to 2p^5 3s$; formally-forbidden transitions (zero oscillator strength, explicit parity demonstration)
+- [ ] Validation against the NIST Atomic Spectra Database: line positions to chemical accuracy on H and He, qualitative on Be and Ne (LDA/RHF mean-field limits)
+
+**The demo.** One plot per element: vertical sticks at computed $\omega_{e0}$, heights set by $f_{0\to e}$, smooth envelope from Doppler broadening at 300 K. Overlay NIST reference lines. Show parity-forbidden transitions coming out numerically $\sim 10^{-12}$ (grid noise) while allowed ones are $\sim 10^{-1}$ — a ten-orders-of-magnitude separation that validates the selection-rule machinery from first principles.
+
+**Exit criterion.** Balmer-α (H, $n = 3 \to 2$) recovered to $< 0.1$ nm on a $N = 800$ log-radial grid. He $1s^2 \to 1s2p$ ($58.4$ nm) recovered to $< 1$ nm at the RHF+CIS level, or the computed number agrees with the single-excitation Lanczos treatment's known systematic offset from experiment. Selection rules demonstrated numerically by a factor $\geq 10^8$ suppression of forbidden lines relative to allowed ones.
+
+**What Phase 6 deliberately does not cover.** Multi-reference excited states (needs CI or TDDFT with a real XC kernel), vibrationally-resolved molecular spectra (needs Franck–Condon machinery), solid-state band transitions (needs periodic BC and $k$-point sampling), and any line-broadening mechanism that requires inter-atomic interactions (pressure broadening). These are separate codebases / separate phases.
+
+### Phase 7 — Scalar-relativistic heavy atoms (optional extension)
+
+An optional side-branch beyond the H → H₂O main line and the Phase 6 spectra layer. Aimed at making the "relativity is visible to the eye" story quantitative: gold's yellow color via the 6s contraction, Hg's 254 nm line as a spin-forbidden transition whose lifetime only comes out right with relativistic corrections. Target audience is the same pedagogical reader as Phase 1. Scoped as a one-month extension, strictly smaller than any of Phases 3–5.
+
+**Why it belongs in GATO.** The new physics is two local operators (mass–velocity $-\hat p^4/8 m^3 c^2$ and Darwin $\propto \nabla^2 V$), or equivalently one position-dependent effective mass in the kinetic stencil (ZORA). Both drop into the existing SCF loop by swapping the kinetic operator — no new solver, no new functional, no new geometry machinery. Everything else (Lanczos, Hartree, LDA, `jax.grad`, and the Phase 6 spectra layer) is re-used unchanged. The correct framing is "GATO with one extra operator", not a new framework.
 
 **Why log-radial, not 3D Cartesian.** At $Z = 79$ the 1s orbital has $\langle r\rangle \sim 1/Z \approx 0.013\,a_0$, far below the $h \approx 0.08\,a_0$ grid spacing used for water. Resolving core electrons on a Cartesian grid would need $N \gtrsim 300$ per axis. Atoms are spherically symmetric, so the natural representation is the log-radial 1D grid already built for `physics/radial_hydrogen.py`: exponential clustering toward the nucleus gives effectively infinite resolution at the core for ~$10^3$ points.
 
@@ -466,6 +488,7 @@ An optional side-branch beyond the H → H₂O main line, aimed at making the "r
 - [ ] Core-valence partitioning: occupy shells by Aufbau, not by Lanczos on a single Krylov run (shell structure is explicit in 1D radial)
 - [ ] `physics/gold.py` — end-to-end driver for Au⁺ ($5d^{10}$, $n_{\rm occ} = 34$) and Hg ($5d^{10}\,6s^2$, $n_{\rm occ} = 40$), running NR and scalar-relativistic side by side
 - [ ] Light-homolog contrast: Cu (3d¹⁰) and Ag (4d¹⁰) — both closed-shell one-column-above relatives of Au⁺, both predicted to show *smaller* relativistic contraction since $Z\alpha$ is smaller; demonstrates the $\sim Z^2$ scaling of the correction
+- [ ] Spectra hook: rerun Phase 6 on Hg's low-lying states with the ZORA operator. Hg 254 nm ($6^1S_0 \to 6^3P_1$) is formally spin-forbidden (ΔS ≠ 0) but visible in mercury lamps because scalar-relativistic + small-SO mixing borrows allowed character from $^1P_1$; reproducing the line at all is a direct consequence of the Phase 7 operator swap
 
 **The demo.** Same SCF stack, two kinetic operators, one plot:
 
@@ -475,9 +498,9 @@ An optional side-branch beyond the H → H₂O main line, aimed at making the "r
 | Au⁺ 5d → 6s gap | UV | visible blue | "gold is yellow" |
 | $\langle r\rangle_{6s}$(Hg) / $\langle r\rangle_{6s}$(Cd) | ratio $\approx 1$ | ratio $< 1$ | Hg's unusual volatility / liquid-at-RT behavior |
 
-**Exit criterion.** Scalar-relativistic Au⁺ 6s orbital energy within $1\%$ of the published all-electron scalar-relativistic DFT reference [Desclaux 1973], and the 5d→6s gap reduction from NR to scalar-rel reproduced to within a few hundred meV. No molecular geometry, no spin-orbit, no two-component spinors — those would be a separate Phase 7 and are not planned.
+**Exit criterion.** Scalar-relativistic Au⁺ 6s orbital energy within $1\%$ of the published all-electron scalar-relativistic DFT reference [Desclaux 1973], and the 5d→6s gap reduction from NR to scalar-rel reproduced to within a few hundred meV. Phase 6 spectra rerun with ZORA gives a nonzero oscillator strength at Hg 254 nm that vanishes in the NR limit.
 
-**What Phase 6 deliberately does not cover.** Full two-component spin-orbit (needs doubled array shapes and a rewritten stencil), the Dirac equation proper (four-component, $Z_{\rm crit} = 1/\alpha$ issues), and any molecular geometry at $Z > 20$. Readers who need those should use DIRAC, ReSpect, or ADF — GATO's scope ends at "the cheapest relativistic correction that makes the textbook story quantitative."
+**What Phase 7 deliberately does not cover.** Full two-component spin-orbit (needs doubled array shapes and a rewritten stencil), the Dirac equation proper (four-component, $Z_{\rm crit} = 1/\alpha$ issues), and any molecular geometry at $Z > 20$. Readers who need those should use DIRAC, ReSpect, or ADF — GATO's scope ends at "the cheapest relativistic correction that makes the textbook story quantitative."
 
 ---
 
@@ -492,7 +515,8 @@ The package stays pure-Python, pure-JAX throughout. No new runtime dependencies 
 | 3 (helium RHF) | laptop CPU (or 5070) | none | none | FFT is in `jax.numpy.fft`; exact exchange is a 3D Poisson solve |
 | 4 (RHF molecules) | local 5070 | none | **`pyscf`** (optional) | pyscf only for cross-validating against a trusted reference |
 | 5 (LDA molecules) | local 5070 | none | none (reuse pyscf for comparison) | LDA is ~10 lines of point-wise math; reuses the Phase 4 SCF loop |
-| 6 (scalar-rel heavy atoms, optional) | laptop CPU | none | none | one extra kinetic operator on the existing log-radial grid |
+| 6 (atomic spectra) | laptop CPU | none | none | Lanczos (present) + one dipole integral, no new infrastructure |
+| 7 (scalar-rel heavy atoms, optional) | laptop CPU | none | none | one extra kinetic operator on the existing log-radial grid |
 | any, on any Nvidia GPU | | `jax[cuda12]` (via `--extra gpu`) | — | bundled CUDA 12 + cuDNN |
 
 For correlated many-body wavefunctions, use [FermiNet](https://github.com/google-deepmind/ferminet) directly — it ships its own JAX dependency set that coexists with GATO's.
