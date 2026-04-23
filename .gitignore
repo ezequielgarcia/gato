@@ -39,3 +39,7 @@ docs/index.md
 # Node (used only by CI docs math validator)
 node_modules/
 package-lock.json
+
+# Editor-generated index files
+tags
+.claude/
