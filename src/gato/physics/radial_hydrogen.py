@@ -83,43 +83,64 @@ class LogRadialGrid:
         return self.alpha * self.r_prime()
 
 
-def _pad_odd_zero(u: jax.Array, width: int = 2) -> jax.Array:
-    """Pad u with odd reflection at ξ=0 and zeros at ξ=1.
+def _pad_boundary(
+    u: jax.Array, width: int = 2, left_sign: int = -1
+) -> jax.Array:
+    """Pad u with signed reflection at ξ=0 and zeros at ξ=1.
 
-    Odd reflection (u_{-1-j} = -u_j) is the physical boundary for u(r) at r=0:
-    the radial function vanishes at the origin and has odd parity through it,
-    so the stencil sees a smoothly extended function instead of an artificial
-    jump to zero.
+    The physical boundary at r=0 depends on angular momentum: the radial
+    function u(r) ≈ r^(ℓ+1) near the origin, so under ξ ↔ -ξ (equivalently
+    r ↔ -r through 0) it has parity (-1)^(ℓ+1). Concretely:
+
+        left_sign = -1  for ℓ = 0, 2, 4, ...   (u odd through r=0)
+        left_sign = +1  for ℓ = 1, 3, 5, ...   (u even through r=0)
+
+    Using the wrong parity biases the kinetic energy by O(h²) and spoils
+    the 4th-order convergence; zero-padding works for ℓ ≥ 1 too but is
+    noticeably worse than the correct reflection.
     """
-    left = -jnp.flip(u[:width])
+    left = left_sign * jnp.flip(u[:width])
     right = jnp.zeros(width, dtype=u.dtype)
     return jnp.concatenate([left, u, right])
 
 
-def _d_dxi_4th(u: jax.Array, h: float) -> jax.Array:
-    p = _pad_odd_zero(u, 2)
+def _left_sign_for_ell(ell: int) -> int:
+    return -1 if (ell % 2 == 0) else +1
+
+
+def _d_dxi_4th(u: jax.Array, h: float, left_sign: int = -1) -> jax.Array:
+    p = _pad_boundary(u, 2, left_sign)
     return (p[:-4] - 8 * p[1:-3] + 8 * p[3:-1] - p[4:]) / (12 * h)
 
 
-def _d2_dxi2_4th(u: jax.Array, h: float) -> jax.Array:
-    p = _pad_odd_zero(u, 2)
+def _d2_dxi2_4th(u: jax.Array, h: float, left_sign: int = -1) -> jax.Array:
+    p = _pad_boundary(u, 2, left_sign)
     return (
         -p[:-4] + 16 * p[1:-3] - 30 * p[2:-2] + 16 * p[3:-1] - p[4:]
     ) / (12 * h * h)
 
 
-def radial_laplacian(u: jax.Array, grid: LogRadialGrid) -> jax.Array:
-    """d²u/dr² on the log grid via chain rule + 4th-order ξ-stencils."""
+def radial_laplacian(
+    u: jax.Array, grid: LogRadialGrid, ell: int = 0
+) -> jax.Array:
+    """d²u/dr² on the log grid via chain rule + 4th-order ξ-stencils.
+
+    The ``ell`` argument only selects the correct parity at the r=0 boundary;
+    the centrifugal barrier itself is added in `radial_hamiltonian`.
+    """
     h = grid.h_xi
-    du = _d_dxi_4th(u, h)
-    d2u = _d2_dxi2_4th(u, h)
+    sign = _left_sign_for_ell(ell)
+    du = _d_dxi_4th(u, h, sign)
+    d2u = _d2_dxi2_4th(u, h, sign)
     rp = grid.r_prime()
     rpp = grid.r_double_prime()
     return d2u / (rp * rp) - rpp / (rp ** 3) * du
 
 
-def radial_kinetic(u: jax.Array, grid: LogRadialGrid) -> jax.Array:
-    return -0.5 * radial_laplacian(u, grid)
+def radial_kinetic(
+    u: jax.Array, grid: LogRadialGrid, ell: int = 0
+) -> jax.Array:
+    return -0.5 * radial_laplacian(u, grid, ell)
 
 
 def coulomb_potential(grid: LogRadialGrid, Z: float = 1.0) -> jax.Array:
@@ -127,8 +148,25 @@ def coulomb_potential(grid: LogRadialGrid, Z: float = 1.0) -> jax.Array:
     return -Z / grid.r()
 
 
-def radial_hamiltonian(u: jax.Array, grid: LogRadialGrid, Z: float = 1.0) -> jax.Array:
-    return radial_kinetic(u, grid) + coulomb_potential(grid, Z) * u
+def centrifugal_barrier(grid: LogRadialGrid, ell: int) -> jax.Array:
+    """Angular-momentum barrier ℓ(ℓ+1)/(2 r²) on the log grid.
+
+    This is the only new term needed to extend the ℓ=0 radial equation to
+    arbitrary ℓ: the reduction ψ_{nℓm}(r,θ,φ) = (u_{nℓ}(r)/r) Y_{ℓm}(θ,φ)
+    turns −½∇² into −½∂²/∂r² + ℓ(ℓ+1)/(2r²) acting on u. Returns zero for
+    ℓ = 0.
+    """
+    if ell == 0:
+        return jnp.zeros_like(grid.r())
+    r = grid.r()
+    return 0.5 * ell * (ell + 1) / (r * r)
+
+
+def radial_hamiltonian(
+    u: jax.Array, grid: LogRadialGrid, Z: float = 1.0, ell: int = 0
+) -> jax.Array:
+    V = coulomb_potential(grid, Z) + centrifugal_barrier(grid, ell)
+    return radial_kinetic(u, grid, ell) + V * u
 
 
 def radial_inner_product(
@@ -138,7 +176,9 @@ def radial_inner_product(
     return grid.h_xi * jnp.sum(u * v * grid.r_prime())
 
 
-def build_hamiltonian_matrix(grid: LogRadialGrid, Z: float = 1.0) -> jax.Array:
+def build_hamiltonian_matrix(
+    grid: LogRadialGrid, Z: float = 1.0, ell: int = 0
+) -> jax.Array:
     """Dense (N, N) matrix H such that (Hu)_j = Σ_k H_{jk} u_k.
 
     Not symmetric: the operator is Hermitian under the weighted inner product
@@ -149,7 +189,7 @@ def build_hamiltonian_matrix(grid: LogRadialGrid, Z: float = 1.0) -> jax.Array:
 
     def column(i):
         e_i = jnp.zeros(N).at[i].set(1.0)
-        return radial_hamiltonian(e_i, grid, Z)
+        return radial_hamiltonian(e_i, grid, Z, ell)
 
     return jax.vmap(column)(jnp.arange(N)).T
 
@@ -164,29 +204,32 @@ def solve_ground_state(
     gives the standard-symmetric matrix H̃ = W^{1/2} H W^{-1/2} with the
     same spectrum as H. Eigenvectors of H̃ map back via u = W^{-1/2} ṽ.
     """
-    energies, states = solve_bound_states(grid, Z, K=1)
+    energies, states = solve_bound_states(grid, Z, K=1, ell=0)
     return energies[0], states[:, 0]
 
 
 def solve_bound_states(
-    grid: LogRadialGrid, Z: float = 1.0, K: int = 5
+    grid: LogRadialGrid, Z: float = 1.0, K: int = 5, ell: int = 0
 ) -> tuple[jax.Array, jax.Array]:
-    """Lowest K ℓ=0 bound states (E_n, u_n) via dense diagonalization.
+    """Lowest K bound states (E_n, u_n) in the ℓ-channel via dense diagonalization.
 
     Returns
     -------
     energies : shape (K,), ascending.
-    states : shape (N, K), each column u_n normalized under
-        ⟨u, u⟩_W = h_ξ Σ r'_j u_j².
+    states : shape (N, K), each column u_{nℓ}(r) normalized under
+        ⟨u, u⟩_W = h_ξ Σ r'_j u_j². The full wavefunction is
+        ψ_{nℓm}(r,θ,φ) = (u_{nℓ}(r)/r) Y_{ℓm}(θ,φ).
 
-    For hydrogen (Z, ℓ=0) the spectrum is E_n = -Z²/(2n²), n = 1, 2, ...,
-    giving the Lyman/Balmer/Paschen line positions directly as eigenvalue
-    differences. Selection rules require Δℓ = ±1 for electric-dipole
-    transitions, so line *positions* are visible in ℓ=0 alone (the
-    spectrum is ℓ-degenerate for pure Coulomb) but line *strengths*
-    between specific (n,ℓ) → (n',ℓ') pairs need ℓ>0 channels.
+    For hydrogen (pure Coulomb, Z) the spectrum is E_n = −Z²/(2n²) with
+    n ≥ ℓ + 1. The ℓ-degeneracy is a Coulomb accident (not a generic
+    spherical-potential feature), so e.g. 2s (ℓ=0) and 2p (ℓ=1) both sit
+    at −Z²/8. Extending beyond ℓ=0 unlocks real electric-dipole matrix
+    elements between solver-produced states: the Δℓ = ±1 selection rule
+    is an *angular* statement (Wigner–Eckart on cos θ between Y_{ℓm}'s),
+    and the radial integral ⟨u_{n'ℓ'} | r | u_{nℓ}⟩ is a one-liner on
+    this grid.
     """
-    H = build_hamiltonian_matrix(grid, Z)
+    H = build_hamiltonian_matrix(grid, Z, ell)
     w_sqrt = jnp.sqrt(grid.r_prime())
     w_inv_sqrt = 1.0 / w_sqrt
     H_sym = (w_sqrt[:, None] * H) * w_inv_sqrt[None, :]
@@ -199,3 +242,22 @@ def solve_bound_states(
     )
     states = states / norms[None, :]
     return energies, states
+
+
+def radial_dipole(
+    u_final: jax.Array, u_initial: jax.Array, grid: LogRadialGrid
+) -> jax.Array:
+    """Radial piece ⟨u_{n'ℓ'} | r | u_{nℓ}⟩ = ∫₀^∞ u' · r · u dr.
+
+    This is the ℓ-independent part of any electric-dipole matrix element
+    between two spherical states. The full ⟨ψ_f | z | ψ_i⟩ (or x, y) is
+
+        ⟨ψ_f | ẑ_α | ψ_i⟩ = ⟨u_f | r | u_i⟩  ·  ⟨Y_{ℓ'm'} | r̂_α | Y_{ℓm}⟩,
+
+    where the angular factor — a standard Gaunt coefficient — enforces
+    Δℓ = ±1 and Δm ∈ {−1, 0, +1}. Example: for 1s → 2p_z,
+        angular piece ⟨Y_{10} | cosθ | Y_{00}⟩ = 1/√3
+        radial piece ⟨u_{2p} | r | u_{1s}⟩ = 256/(81√6)
+        product = 128√2/243 ≈ 0.7449 a₀ (Bethe–Salpeter §63).
+    """
+    return grid.h_xi * jnp.sum(u_final * grid.r() * u_initial * grid.r_prime())
