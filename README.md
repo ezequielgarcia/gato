@@ -520,7 +520,7 @@ An optional side-branch beyond the H → H₂O main line and the Phase 6 spectra
 **Why log-radial, not 3D Cartesian.** At $Z = 79$ the 1s orbital has $\langle r\rangle \sim 1/Z \approx 0.013\,a_0$, far below the $h \approx 0.08\,a_0$ grid spacing used for water. Resolving core electrons on a Cartesian grid would need $N \gtrsim 300$ per axis. Atoms are spherically symmetric, so the natural representation is the log-radial 1D grid already built for `physics/radial_hydrogen.py`: exponential clustering toward the nucleus gives effectively infinite resolution at the core for ~$10^3$ points.
 
 - [ ] `operators.kinetic_zora(psi, V, h, c)` — ZORA kinetic on the log-radial grid, $\hat T = \hat p\,[c^2/(2 m c^2 - V)]\,\hat p$
-- [ ] `operators.kinetic_mv_darwin` — alternative perturbative mass-velocity + Darwin, as a cross-check against ZORA
+- [x] `physics/fine_structure.py` — perturbative mass–velocity $\langle -p^4 / 8c^2\rangle$ and Darwin $\langle (\pi Z / 2c^2)\,\delta^3(r)\rangle$ on the existing log-radial ℓ=0 ground state. Hydrogen 1s recovers the Sommerfeld shift $-\alpha^2/8 \approx -6.66 \times 10^{-6}\,E_h$ to $\sim 2\%$ (partial-cancellation limited; each piece converges to $\sim 0.2\%$ at $N=1600$, $r_{\min}=0.01/Z$). $Z^4$ scaling verified on $Z = 1, 2$.
 - [ ] `functionals.lda_xc_*_radial` — LDA XC adapted to the 1D radial angular integration (trivial factor of $4\pi r^2$)
 - [ ] `scf_rhf_radial` / `scf_ks_lda_radial` — radial analogues of the Phase 3 SCF loops, with a spherical Hartree kernel (1D radial Poisson, $O(N)$)
 - [ ] Core-valence partitioning: occupy shells by Aufbau, not by Lanczos on a single Krylov run (shell structure is explicit in 1D radial)
@@ -624,6 +624,8 @@ Phases 1, 2, and 3 are **complete end-to-end**.
 | H $E_{2p}$ (log-radial ℓ=1, $N=800$) | | $-0.12500\,E_h$ | $-0.125$ |
 | H $E_{3d}$ (log-radial ℓ=2, $N=800$) | | $-0.05556\,E_h$ | $-1/18$ |
 | Radial dipole $\langle u_{2p}\|r\|u_{1s}\rangle$ (log-radial) | | $1.2903\,a_0$ | $256/(81\sqrt 6) = 1.2903$ |
+| H 1s $\langle p^4\rangle$ (log-radial $N=1600$) | | $5.006$ | $5$ |
+| H 1s fine-structure $\Delta E$ (MV + Darwin, $N=1600$) | | $-6.80\times 10^{-6}\,E_h$ | $-\alpha^2/8 = -6.66 \times 10^{-6}$ |
 
 The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 46 tests pass.
 
