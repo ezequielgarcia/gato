@@ -5,10 +5,6 @@
 > Math renders cleanly on the rendered docs site: **<https://ezequielgarcia.github.io/gato/>**.
 > GitHub's markdown viewer mangles display-math spacing and some macros — prefer the site for the phase notes.
 
-> "All theoretical chemistry is really physics; and all theoretical chemists know it."
->
-> — **Richard Feynman**
-
 A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/), targeting GPU backends.
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
@@ -43,6 +39,10 @@ This README is meant to be readable by a physics student who has seen Griffiths'
 ---
 
 ## 0. What GATO is
+
+> "All theoretical chemistry is really physics; and all theoretical chemists know it."
+>
+> — **Richard Feynman**
 
 GATO solves the electronic Schrödinger equation for atoms and molecules, from first principles, on a computer.
 
