@@ -10,6 +10,8 @@ A 3D Schrödinger solver built from scratch in [JAX](https://jax.readthedocs.io/
 
 This README is meant to be readable by a physics student who has seen Griffiths' *Introduction to Quantum Mechanics* but not necessarily a full graduate course on computational electronic structure. It explains both what the code does and *why* each design choice was made.
 
+> **For students:** a short, narrative synthesis of the physics behind GATO — from the single-particle Schrödinger equation through Hartree–Fock, DFT, scalar-relativistic ZORA, and geometry optimization — lives at [`docs/students_note.md`](docs/students_note.md) (also available as a [PDF](docs/students_note.pdf) and on the [docs site](https://ezequielgarcia.github.io/gato/students_note/)).
+
 ---
 
 ## Contents
