@@ -126,6 +126,80 @@ check on the Phase 1 number.
 
 ---
 
+## Pallas kernel for the $H\psi$ inner loop
+
+### Framing
+
+Every solver we've built — imag-time, Lanczos, Rayleigh-quotient descent,
+the SCF Fock-apply — bottoms out in the same operation: apply $\hat H = \hat T + V$
+to a $\psi$ array on the 3D grid, thousands of times per solve. Today this
+is pure JAX: `jnp.pad` / `jnp.roll` for the 7-point (or 13-point) stencil,
+a pointwise $V\psi$, and a reduction for the Rayleigh quotient. Correct and
+reasonably fast, but bandwidth-bound and touches the $N^3$ array ~4× per
+apply.
+
+A [Pallas](https://jax.readthedocs.io/en/latest/pallas/index.html) kernel
+(JAX's Triton-lowering DSL) fuses the stencil + $V\psi$ + reduction into a
+single launch, tiling the cube into shared memory so each interior point
+is read once. Classic GPU stencil territory.
+
+### Scope
+
+GPU-only (NVIDIA via Triton); keep the existing JAX path as the fallback,
+dispatch on `jax.default_backend()`. TPU has Pallas support too but would
+need a separate Mosaic kernel; out of scope.
+
+### First PR
+
+1. `pallas_laplacian_plus_v(psi, V, h)` — 7-point stencil + local potential,
+   Dirichlet BC, fp32/fp64 parametric. ~80–120 lines.
+2. Parity test against `operators.laplacian` + `hamiltonian.apply` to
+   $10^{-10}$ on a $32^3$ random input.
+3. Micro-benchmark on $96^3$ and $128^3$, fp32 and fp64.
+4. Wire behind `Hamiltonian(..., use_pallas=False)` so nothing downstream
+   changes by default.
+
+### Follow-ups (each its own PR)
+
+- Fuse $\langle\psi|\hat H|\psi\rangle$ reduction into the same kernel —
+  biggest win for Lanczos/imag-time since the stencil output never needs
+  to materialize.
+- 4th-order 13-point stencil variant.
+- ZORA kinetic: same stencil shape with position-dependent
+  $K(\mathbf r) = c^2 / (2c^2 - V(\mathbf r))$ loaded per-point; also fuses
+  the $K'/r$ correction term that Phase 7 needs.
+- Fused $1/k^2$ multiply on the inverse-FFT output in `solvers/poisson.py`.
+
+### Expected payoff
+
+Bandwidth-bound on a single consumer GPU, so realistic speedup on the
+stencil itself is ~1.5–3× rather than 10×. The bigger win is composition:
+Lanczos/imag-time do $O(100\text{–}1000)$ applies per solve, and the SCF
+loop then does tens of those. At fp32 the speedup stacks; at fp64 on
+consumer NVIDIA parts (1/32 throughput of fp32) the kernel is still
+bandwidth-bound so the proportional win is similar.
+
+### Caveats
+
+- The stock JAX stencil is already pretty good — worth measuring before
+  claiming numbers.
+- Double precision on consumer NVIDIA GPUs is 1/32 the fp32 throughput;
+  if GATO is fp64 everywhere the compute-side ceiling is lower than a
+  naïve roofline suggests.
+- Pallas kernels don't yet compose with `jax.grad` as cleanly as pure
+  JAX — if autodiff through the Hamiltonian matters for a solver (Pulay
+  forces, differentiable PP parameters), keep the JAX path for those.
+
+### Where *not* to put a Pallas kernel
+
+- `solvers/imag_time.py` FFT split-operator step — cuFFT saturates BW.
+- `ansatz/neural.py` MLP — XLA fuses dense + activations fine.
+- 1D radial solvers in `physics/radial_hydrogen.py`, `physics/fine_structure.py`
+  — $N \sim 10^3$, kernel launch overhead dominates.
+- `scf.py` DIIS / mixing — orchestration, not arithmetic.
+
+---
+
 ## Rejected / evaluated ideas (record of discussion, not plans)
 
 - **Log-radial as the main 3D grid.** Doesn't generalize to molecules (can't
