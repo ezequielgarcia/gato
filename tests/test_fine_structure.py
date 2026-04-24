@@ -15,8 +15,13 @@ from gato.physics.fine_structure import (
     mass_velocity_expectation,
     p4_expectation,
     psi_at_origin_sq,
+    solve_zora_ground_state,
 )
-from gato.physics.radial_hydrogen import LogRadialGrid, solve_bound_states
+from gato.physics.radial_hydrogen import (
+    LogRadialGrid,
+    solve_bound_states,
+    solve_ground_state,
+)
 from gato.spectra import FINE_STRUCTURE
 
 ALPHA2 = FINE_STRUCTURE ** 2
@@ -115,3 +120,101 @@ def test_fine_structure_is_small_compared_to_binding():
     ratio = abs(shift / E_nr)
     assert ratio < 1e-4
     assert ratio > 1e-6
+
+
+# -------------------- ZORA --------------------
+
+def test_zora_hydrogen_1s_shift_is_alpha2_Z4_over_4():
+    """E_ZORA − E_NR = −α² Z⁴ / 4 for hydrogen 1s at leading order in α².
+
+    This is *twice* the Sommerfeld / Dirac shift (−α² Z⁴ / 8), which is a
+    known feature of *scalar* ZORA for deeply-bound hydrogenic 1s states:
+    ZORA is a different O(α²) approximation than the Foldy–Wouthuysen
+    expansion that produces MV + Darwin, and it lacks the "picture change"
+    correction that would halve the shift and bring it to the Dirac value.
+    Both ZORA and MV+Darwin are valid *leading-order* scalar-relativistic
+    corrections; they disagree on the coefficient by a factor of 2 for H
+    1s and both scale as Z⁴, which is exactly what this test pins down.
+
+    Derivation: expanding T_ZORA = p·K·p with K ≈ 1/2 + V/(4c²) gives the
+    perturbative shift (α²/4)⟨p V p⟩_{1s} = (α²/4)(−Z⁴) = −α² Z⁴ / 4.
+    """
+    grid = LogRadialGrid(N=1600, r_min=0.01, r_max=40.0)
+    E_nr, _ = solve_ground_state(grid, Z=1.0)
+    E_zora, _ = solve_zora_ground_state(grid, Z=1.0)
+    shift = float(E_zora - E_nr)
+    expected = -ALPHA2 / 4.0  # ≈ -1.3313e-5
+    assert abs(shift - expected) / abs(expected) < 1e-2, (
+        f"ZORA shift = {shift:.4e}, expected {expected:.4e} (−α²/4)"
+    )
+    assert shift < 0
+
+
+def test_zora_shift_converges_with_N():
+    """ZORA shift settles to a stable value as the grid refines.
+
+    A discretization bug (e.g. the missing (K'/r) u term) diverges
+    monotonically with N; a correctly-discretized operator converges
+    towards a fixed limit. We check monotone convergence over
+    N = 800, 1600, 3200 by requiring the N=1600→3200 step to be smaller
+    than the N=800→1600 step.
+    """
+    shifts = []
+    for N in (800, 1600, 3200):
+        grid = LogRadialGrid(N=N, r_min=0.01, r_max=40.0)
+        E_nr, _ = solve_ground_state(grid, Z=1.0)
+        E_zora, _ = solve_zora_ground_state(grid, Z=1.0)
+        shifts.append(float(E_zora - E_nr))
+    step12 = abs(shifts[1] - shifts[0])
+    step23 = abs(shifts[2] - shifts[1])
+    assert step23 < step12, (
+        f"ZORA not converging with N: shifts = {shifts}"
+    )
+    # And the last value sits inside the physically-expected range.
+    assert -3.0 * ALPHA2 / 8.0 < shifts[-1] < -1.0 * ALPHA2 / 8.0
+
+
+def test_zora_is_roughly_twice_mv_plus_darwin():
+    """Scalar ZORA ≈ 2 · (MV + Darwin) for H 1s.
+
+    Both are O(α²) scalar-relativistic corrections to the NR Schrödinger
+    energy, but ZORA and Foldy–Wouthuysen (which generates MV + Darwin)
+    are distinct resummations and give coefficients that differ by a
+    factor of 2 on deeply-bound 1s states. Verifying this relation
+    connects the two code paths and validates both discretizations:
+    a bug in either one would break the ratio, and the factor of 2 is
+    sharp enough to catch subtle sign/derivative errors.
+    """
+    grid = LogRadialGrid(N=1600, r_min=0.01, r_max=40.0)
+    E_nr, u_nr = solve_ground_state(grid, Z=1.0)
+    E_zora, _ = solve_zora_ground_state(grid, Z=1.0)
+    shift_zora = float(E_zora - E_nr)
+    shift_pert = float(fine_structure_shift(u_nr, grid, Z=1.0))
+    ratio = shift_zora / shift_pert
+    assert abs(ratio - 2.0) < 0.1, (
+        f"ZORA / (MV+Darwin) = {ratio:.3f}, expected ≈ 2"
+    )
+
+
+def test_zora_z_scaling():
+    """E_ZORA − E_NR scales as Z⁴ (leading) for hydrogenic ions.
+
+    The ratio of shifts at Z = 2 vs Z = 1 should equal 16 to leading
+    order; the O(α⁴) correction enters as (Zα)⁴ so the ratio holds
+    tightly for Z ≤ 10. Tolerance: 1 %.
+    """
+    grid1 = LogRadialGrid(N=1600, r_min=0.01, r_max=40.0)
+    grid2 = LogRadialGrid(N=1600, r_min=0.005, r_max=20.0)
+
+    E_nr_1, _ = solve_ground_state(grid1, Z=1.0)
+    E_zora_1, _ = solve_zora_ground_state(grid1, Z=1.0)
+    shift_1 = float(E_zora_1 - E_nr_1)
+
+    E_nr_2, _ = solve_ground_state(grid2, Z=2.0)
+    E_zora_2, _ = solve_zora_ground_state(grid2, Z=2.0)
+    shift_2 = float(E_zora_2 - E_nr_2)
+
+    ratio = shift_2 / shift_1
+    assert abs(ratio - 16.0) / 16.0 < 1e-2, (
+        f"Z⁴ scaling: shift(Z=2) / shift(Z=1) = {ratio:.3f}, want 16"
+    )
