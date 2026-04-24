@@ -164,13 +164,38 @@ def solve_ground_state(
     gives the standard-symmetric matrix H̃ = W^{1/2} H W^{-1/2} with the
     same spectrum as H. Eigenvectors of H̃ map back via u = W^{-1/2} ṽ.
     """
+    energies, states = solve_bound_states(grid, Z, K=1)
+    return energies[0], states[:, 0]
+
+
+def solve_bound_states(
+    grid: LogRadialGrid, Z: float = 1.0, K: int = 5
+) -> tuple[jax.Array, jax.Array]:
+    """Lowest K ℓ=0 bound states (E_n, u_n) via dense diagonalization.
+
+    Returns
+    -------
+    energies : shape (K,), ascending.
+    states : shape (N, K), each column u_n normalized under
+        ⟨u, u⟩_W = h_ξ Σ r'_j u_j².
+
+    For hydrogen (Z, ℓ=0) the spectrum is E_n = -Z²/(2n²), n = 1, 2, ...,
+    giving the Lyman/Balmer/Paschen line positions directly as eigenvalue
+    differences. Selection rules require Δℓ = ±1 for electric-dipole
+    transitions, so line *positions* are visible in ℓ=0 alone (the
+    spectrum is ℓ-degenerate for pure Coulomb) but line *strengths*
+    between specific (n,ℓ) → (n',ℓ') pairs need ℓ>0 channels.
+    """
     H = build_hamiltonian_matrix(grid, Z)
     w_sqrt = jnp.sqrt(grid.r_prime())
     w_inv_sqrt = 1.0 / w_sqrt
     H_sym = (w_sqrt[:, None] * H) * w_inv_sqrt[None, :]
     H_sym = 0.5 * (H_sym + H_sym.T)
     eigvals, eigvecs = jnp.linalg.eigh(H_sym)
-    E0 = eigvals[0]
-    u0 = eigvecs[:, 0] * w_inv_sqrt
-    u0 = u0 / jnp.sqrt(radial_inner_product(u0, u0, grid))
-    return E0, u0
+    energies = eigvals[:K]
+    states = eigvecs[:, :K] * w_inv_sqrt[:, None]
+    norms = jnp.sqrt(
+        grid.h_xi * jnp.sum(states * states * grid.r_prime()[:, None], axis=0)
+    )
+    states = states / norms[None, :]
+    return energies, states

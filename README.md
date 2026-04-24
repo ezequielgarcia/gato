@@ -493,13 +493,15 @@ The first phase that goes *beyond ground states*. Phases 1–5 compute $E_0$ and
 
 **Why it belongs here.** The Lanczos solver from Phase 1 already returns the lowest $K$ eigenpairs of any matrix-free Hermitian operator. Phases 1–5 used only the ground state; Phase 6 uses the rest. The transition dipole moment $\mu_{0\to e} = \langle\psi_e | \hat{\mathbf r} | \psi_0\rangle$ is one grid integration once both states are on the grid. Selection rules are not postulated; they emerge as parity and Wigner–Eckart statements about which dipole integrals vanish by symmetry. Natural (lifetime) linewidths are computed from the Einstein $A$ coefficient, which is another closed-form function of the same $\mu$. All of this is a few hundred lines on top of the Phase 3 / Phase 5 atomic solvers.
 
-- [ ] `spectra.excited_states_lanczos` — return the lowest $K$ eigenpairs of the (Fock or KS) Hamiltonian, reusing the Phase 1 solver with $K > 1$
-- [ ] `spectra.transition_dipole(psi_0, psi_e, grid)` — compute $\boldsymbol{\mu}_{0 \to e} = \int \psi_e^{\ast}\,\mathbf r\,\psi_0\,dV$, returning a 3-vector per pair
-- [ ] `spectra.oscillator_strength(omega, mu)` — the standard $f_{0\to e} = (2/3)\,m_e\,\omega_{e0}\,|\mu|^2/\hbar$
-- [ ] `spectra.einstein_A(omega, mu)` — natural emission rate $A = (4\omega^3 / 3\hbar c^3)\,|\mu|^2$, gives the natural linewidth $\Gamma_{\rm nat} = \hbar A$
+- [ ] `spectra.excited_states_lanczos` — return the lowest $K$ eigenpairs of the (Fock or KS) Hamiltonian, reusing the Phase 1 solver with $K > 1$ *(Cartesian path pending; log-radial ℓ=0 covered by `physics/radial_hydrogen.solve_bound_states(grid, Z, K)`)*
+- [x] `spectra.transition_dipole(psi_0, psi_e, grid)` — 3-vector $\boldsymbol{\mu}_{0 \to e} = \int \psi_e^{\ast}\,\mathbf r\,\psi_0\,dV$; validated against analytic $\langle 1s | z | 2p_z\rangle = 128\sqrt{2}/243$
+- [x] `spectra.oscillator_strength(omega, mu)` — $f_{0\to e} = (2/3)\,\omega_{e0}\,|\mu|^2$ in atomic units; reproduces the textbook $f(1s \to 2p) = 0.41620$
+- [x] `spectra.einstein_A(omega, mu)` — natural emission rate $A = (4\omega^3 / 3 c^3)\,|\mu|^2$ with $c = 1/\alpha$
+- [x] `spectra.photon_wavelength_nm(omega)` — convenience $\lambda[\text{nm}] = hc/\omega$ for reporting line positions
 - [ ] `spectra.absorption_cross_section(omega, lines, broadening)` — Lorentzian (natural) + Gaussian (Doppler, $T$-dependent) broadening, returning $\sigma(\omega)$ as a stick spectrum or smooth curve
 - [ ] `physics/atomic_spectra.py` — end-to-end driver producing NIST-comparable tables and plots for H, He, Be, Ne
-- [ ] Demos: Balmer series ($n=3,4,5 \to n=2$); He $1s^2\to 1s2s$ and $1s^2\to 1s2p$; Be $2s^2\to 2s2p$; Ne $2p^6\to 2p^5 3s$; formally-forbidden transitions (zero oscillator strength, explicit parity demonstration)
+- [x] Balmer series demo (H, $n = 3, 4, 5 \to n = 2$) — line positions recovered to $< 0.1$ nm vs. infinite-nuclear-mass Rydberg prediction on an $N=800$ log-radial grid. Residual vs. NIST (~0.2 nm) is the unmodeled reduced-mass correction $m_p/(m_p + m_e)$, not a solver defect.
+- [ ] Remaining demos: He $1s^2\to 1s2s$ and $1s^2\to 1s2p$; Be $2s^2\to 2s2p$; Ne $2p^6\to 2p^5 3s$; formally-forbidden transitions (zero oscillator strength, explicit parity demonstration)
 - [ ] Validation against the NIST Atomic Spectra Database: line positions to chemical accuracy on H and He, qualitative on Be and Ne (LDA/RHF mean-field limits)
 
 **The demo.** One plot per element: vertical sticks at computed $\omega_{e0}$, heights set by $f_{0\to e}$, smooth envelope from Doppler broadening at 300 K. Overlay NIST reference lines. Show parity-forbidden transitions coming out numerically $\sim 10^{-12}$ (grid noise) while allowed ones are $\sim 10^{-1}$ — a ten-orders-of-magnitude separation that validates the selection-rule machinery from first principles.
@@ -614,6 +616,10 @@ Phases 1, 2, and 3 are **complete end-to-end**.
 | He⁺ $E_0$ (imag-time, $48^3$, $L=6$, $O(h^4)$) | | $-1.900\,E_h$ | $-2.000$ |
 | Li²⁺ $E_0$ (imag-time, $48^3$, $L=4$, $O(h^4)$) | | $-4.275\,E_h$ | $-4.500$ |
 | 3D HO Lanczos ladder ($N=40$, $L=10$) | | $1.50, 2.50, 3.50, \ldots$ | $1.5, 2.5, 3.5, \ldots$ |
+| Balmer H-α ($n=3\to 2$, log-radial $N=800$) | | $656.113$ nm | $656.113$ |
+| Balmer H-β ($n=4\to 2$, log-radial $N=800$) | | $486.009$ nm | $486.009$ |
+| Balmer H-γ ($n=5\to 2$, log-radial $N=800$) | | $433.937$ nm | $433.937$ |
+| Dipole $\langle 1s\|z\|2p_z\rangle$ ($80^3$, $L=20$) | | $0.7449\,a_0$ | $128\sqrt{2}/243 = 0.7449$ |
 
 The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 46 tests pass.
 
@@ -622,6 +628,8 @@ The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6
 **Phase 3 is complete on helium.** Self-consistent RHF and Kohn–Sham-LDA drivers on He converge in $\sim 6$ iterations at $\varepsilon = h/2$; sweeping $\varepsilon$ across five values at fixed grid and linearly extrapolating $E(\varepsilon) \to E(0)$ closes the residual to $-3.4\,$mHa (RHF) and $+4.0\,$mHa (LDA) at $N = 80$, $L = 10\,a_0$ — at chemical accuracy, with the remaining few-mHa residual attributable to 4th-order-stencil grid discretization rather than softening. The Hockney doubled-grid FFT Hartree solver, the general $n_\text{orb}^2$ exchange operator written in its full form (validated analytically at $n_\text{occ} = 1$, where it reduces to self-exchange), and the symmetry-breaking core-Hamiltonian initial guess are all implemented. The Be ($n_\text{occ} = 2$) and Ne ($n_\text{occ} = 5$) tests stand as `@pytest.mark.skip`-decorated stubs; the multi-orbital code path has **not** been exercised on a real atom and will be validated when the 5070 is wired in.
 
 All Phase 1, 2, and 3 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and runs unchanged on GPU via `uv sync --extra gpu`; on an RTX 5070 the same Phase 3 helium extrapolation is expected in single-digit minutes, and the Be/Ne benchmarks become tractable.
+
+**Phase 6 scaffold in place on CPU.** `spectra.py` provides `transition_dipole`, `oscillator_strength`, `einstein_A`, `photon_wavelength_nm`; `physics/radial_hydrogen.solve_bound_states` returns the lowest $K$ ℓ=0 eigenpairs for Balmer-style line extraction. Six spectra tests pass in ~4 s: the Balmer H-α/β/γ positions on an $N=800$ log-radial grid match the theoretical Rydberg values to $<0.1$ nm (Phase 6 exit criterion for hydrogen), the analytic $\langle 1s|z|2p_z\rangle = 128\sqrt{2}/243$ is recovered on an $80^3$ Cartesian grid, and $f(1s \to 2p) = 0.41620$ comes out of `oscillator_strength`. Still pending: ℓ>0 log-radial channels, multi-electron excited states on the Phase 3 SCF Hamiltonian (He $1s^2 \to 1s2p$), absorption-cross-section broadening, and the end-to-end `physics/atomic_spectra.py` driver.
 
 Next up: **Phase 4** — RHF on H₂, LiH, and H₂O with nuclear-gradient forces from the converged SCF density. The Phase 3 softening-extrapolation recipe ports over unchanged. Water is the project's **ab-initio terminal target**; Phase 5 adds LDA as a parameterized comparison; Phase 6 extracts atomic absorption spectra; Phase 7 (optional) swaps the kinetic operator for a scalar-relativistic form and picks up gold / mercury. Beyond Phase 5, users who need correlated many-body wavefunctions should run FermiNet on the output geometries — see §5.6.
 

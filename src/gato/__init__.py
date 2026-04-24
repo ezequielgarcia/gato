@@ -25,6 +25,12 @@ from .potentials import (
     multi_center_softened_coulomb,
     softened_coulomb,
 )
+from .spectra import (
+    einstein_A,
+    oscillator_strength,
+    photon_wavelength_nm,
+    transition_dipole,
+)
 
 __all__ = [
     "Grid3D",
@@ -33,6 +39,7 @@ __all__ = [
     "bond_angle",
     "bond_length",
     "constant",
+    "einstein_A",
     "enable_x64",
     "gradient",
     "harmonic_oscillator",
@@ -46,10 +53,13 @@ __all__ = [
     "norm_sq",
     "normalize",
     "nuclear_repulsion",
+    "oscillator_strength",
+    "photon_wavelength_nm",
     "potential_energy",
     "radial_density",
     "recenter",
     "softened_coulomb",
+    "transition_dipole",
     "virial_ratio",
 ]
 
