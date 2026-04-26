@@ -1,7 +1,6 @@
 from .imag_time import imaginary_time
 from .lanczos import LanczosResult, lanczos
 from .poisson import hartree_energy, hartree_potential
-from .vqe import vqe
 
 __all__ = [
     "LanczosResult",
@@ -9,5 +8,4 @@ __all__ = [
     "hartree_potential",
     "imaginary_time",
     "lanczos",
-    "vqe",
 ]

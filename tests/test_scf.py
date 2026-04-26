@@ -25,7 +25,7 @@ import pytest
 
 from gato.grid import Grid3D, inner_product, normalize
 from gato.potentials import softened_coulomb
-from gato.scf import _MixedFock, exchange_apply, rhf_energy, scf_ks_lda, scf_rhf
+from gato.scf import _MixedFock, exchange_apply, rhf_energy, scf_rhf
 from gato.solvers.poisson import hartree_potential
 
 gpu_only = pytest.mark.skipif(
@@ -123,32 +123,6 @@ def test_helium_scf_converges():
     assert abs(result.energy - E_soft) < 0.010, (
         f"He RHF energy {result.energy} deviates from softened reference {E_soft} by "
         f"{abs(result.energy - E_soft) * 1000:.1f} mHa"
-    )
-
-
-def test_helium_ks_lda_converges():
-    """Kohn–Sham LDA on He: exact LDA reference is -2.834 E_h.
-
-    As with the RHF test, the softened V_ext and Hartree kernel at N=64 L=10
-    produce a softened-Hamiltonian ground state offset from the reference by
-    a few hundred mHa; we pin the measured softened answer and leave the
-    1 mHa accuracy target to the phase-3 accuracy task.
-    """
-    grid = Grid3D(N=64, L=10.0)
-    V_ext = softened_coulomb(grid, Z=2.0)
-
-    result = scf_ks_lda(
-        V_ext, grid, n_occ=1,
-        max_iters=30, tol=1e-6, mixing=0.7, order=4, lanczos_iters=40,
-    )
-
-    assert result.converged, f"SCF did not converge; history={result.energy_history}"
-    assert result.energy > -3.0
-    # Sanity: LDA energy should sit near the RHF energy (both around -2.6 on
-    # this softened grid, with LDA slightly above RHF for He because LDA
-    # underestimates exchange and the exchange term dominates for 2 electrons).
-    assert -2.8 < result.energy < -2.3, (
-        f"He LDA energy {result.energy} outside expected softened-grid range"
     )
 
 

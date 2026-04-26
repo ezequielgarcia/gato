@@ -1,9 +1,26 @@
 """Log-spaced 1D radial solver for single-center hydrogenic atoms.
 
-A standalone cross-check for Phase 1. This module does **not** participate in
-the 3D Cartesian stack — it's here so the hydrogen ground state can be
-recovered with a *pure* -Z/r potential (no softening) to independently validate
-the ε → 0 linear extrapolation reported in the main benchmark.
+Pedagogical role
+----------------
+**Independent oracle for Phase 1.** This module does *not* participate in
+the 3D Cartesian SCF stack and is *not* used by any phase ≥ 1 driver. It
+exists for one reason: to provide a wholly different discretization
+(1D log-radial, exact -Z/r, no softening) that can independently validate
+the ε → 0 extrapolation of the 3D Cartesian solver.
+
+The 3D grid solves the *softened* Coulomb problem and extrapolates
+ε → 0; this radial solver solves the *bare* Coulomb problem directly.
+Agreement to ~10⁻⁷ E_h between the two — by construction independent
+discretizations — is the strongest possible internal check that the
+softening-extrapolation recipe is honest.
+
+Limitations (deliberate)
+------------------------
+- Single-center only. Cannot represent multi-nucleus molecules — there
+  is no second origin to expand around.
+- ℓ = 0 by default; the centrifugal-barrier extension covers other ℓ
+  but only for spherical potentials.
+- This is **not** a production solver. It is an oracle. Keep it.
 
 Physics
 -------

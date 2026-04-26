@@ -200,6 +200,83 @@ bandwidth-bound so the proportional win is similar.
 
 ---
 
+## `qato` — a sibling project for Quantum Monte Carlo
+
+### Framing
+
+GATO is structurally mean-field: one-electron orbitals on a grid, optimized variationally. That's why it teaches Schrödinger-on-a-grid beautifully but is **structurally blind to dispersion** (London R⁻⁶ attraction needs correlated motion of electrons on different atoms; mean-field factorizes that away). The He–He dimer is the canonical demonstration: pure HF gives a monotonic repulsive wall, no minimum, because dispersion is a correlation effect that mean-field cannot see by construction.
+
+The right next step beyond Phase 5 is not "more grids, finer spacing" — it's **methods that respect antisymmetry and capture correlation simultaneously**. Quantum Monte Carlo (VMC + DMC) is the cleanest pedagogical entry point into that world.
+
+### Why a separate repo
+
+VMC's primitives — electron-position walkers, log-ψ evaluation, local-energy estimator, Metropolis moves, branching populations — share almost nothing with GATO's grid-and-stencil core. Mixing them would pollute GATO's clean grid-centric design with stochastic-sampling abstractions that have a different shape entirely. What's reused is small but valuable: JAX/jit infrastructure, atomic units, the converged Phase-3 He reference for benchmarking, and Hamiltonian operators expressed as pure functions.
+
+Suggested name: **`qato`** (parallels GATO; signals lineage as a sibling, not a replacement). **Scope: VMC only.** DMC is explicitly out of scope for v1 — it doubles the code volume, adds several new failure modes (branching, fixed-node, time-step extrapolation, population control), and its pedagogical lesson (imaginary-time projection + fixed-node theorem) is meta-methodology rather than the headline physics. The headline physics — correlation, dispersion, antisymmetric wavefunctions — is fully captured by VMC.
+
+### Phase progression (mirrors GATO's incremental shape)
+
+- **Phase 0 — H (infrastructure, not physics).** Slater 1s with $\zeta = 1$ is the *exact* hydrogen ground state, so VMC on it has zero variance — local energy $E_L = \hat H\psi/\psi$ is constant at $-0.5\,E_h$ everywhere. Use this phase for infrastructure: Metropolis sampler, walker data structure, local-energy estimator via `jax.grad`/`jax.hessian` of $\log\psi$, autocorrelation diagnostics, blocking analysis for error bars. Then deliberately break it — start with a Gaussian trial $e^{-\alpha r^2}$ instead of $e^{-\zeta r}$ and watch VMC optimize $\alpha$ while never reaching $-0.5$ exactly (wrong cusp). The **zero-variance principle** is the lesson.
+- **Phase 1 — Hydrogenic (Z-scaling, excited states).** He⁺, Li²⁺: same code, different $Z$. Adds the $\ell > 0$ excited-state machinery (Slater determinant of orthogonal one-electron orbitals). Validates that the sampler handles nodes correctly — 2p has a nodal plane, walkers must cross it cleanly.
+- **Phase 2 — He VMC (correlation appears).** Slater–Jastrow trial: determinant of two 1s orbitals × $\exp[u(r_{12})]$ with a 2–4 parameter Padé. HF gives $-2.862\,E_h$, exact is $-2.903\,E_h$. Watch Jastrow optimization close ~90% of that gap. **The Jastrow factor is where electron correlation lives, made visible.**
+- **Phase 3 — He–He (dispersion emerges).** Two He nuclei at separation $R$, four electrons, Slater–Jastrow generalized to inter-atomic Jastrow terms $u(r_{ij})$ between electrons on different atoms. Sweep over $R$, subtract $2 E(\text{He})$, plot. **The R⁻⁶ tail emerges from the optimized inter-atomic Jastrow; the repulsive wall emerges from the determinant.** Both at once, no hand-tuning, no empirical input. Terminal demo of the project. Quantitative agreement with experiment is *not* the goal — qualitatively-correct shape (well depth within a factor of ~2, equilibrium $R$ within ~10%) is sufficient and is what VMC alone delivers via systematic error cancellation between dimer and atomic limits.
+
+### Out of scope (deferred indefinitely, possibly forever)
+
+- **DMC.** Listed here for completeness, not as a roadmap item. Would be the natural next step if quantitative experimental agreement ever became the goal — branching walkers (or fixed-population reconfiguration), fixed-node projection, time-step extrapolation, population-control bias correction. Adds ~2–3× code volume; the headline physics is already done at VMC. Revisit only if there's a concrete reason (paper, benchmark, comparison to literature numbers).
+- **Backflow and neural-network trial wavefunctions.** A natural progression *within* VMC — replace the hand-designed Slater–Jastrow with backflow coordinates, then with a FermiNet-style network. Each step is a more flexible parameterization optimized by the same VMC machinery. Out of scope for v1 because Slater–Jastrow is enough to demonstrate dispersion on He–He; revisit if extending to larger systems or aiming at neural-VMC benchmarks.
+
+### Pedagogical pacing
+
+In GATO the H phase is genuinely a payoff ("we computed hydrogen from a 3D grid!"). In QMC the H phase is *infrastructure* ("we built a sampler") because the interesting QMC physics — correlation — only appears at He. Worth signposting in the README: Phase 0/1 are scaffolding, Phase 2 is where the satisfying physics starts.
+
+### Minimum viable first PR
+
+He₂ at one fixed separation, Slater–Jastrow trial, VMC only: ~400 lines.
+- Slater determinant from frozen Phase-3 He 1s orbitals.
+- Jastrow as 2–4 parameter Padé in $r_{ij}$.
+- Local energy via `jax.grad`/`jax.hessian` of $\log\psi$.
+- Metropolis sampling with autocorrelation diagnostics.
+- Optimize Jastrow parameters by SR or Adam on the variance-reduced energy.
+- The pedagogical money shot: $E_{\rm VMC} < E_{\rm HF}$. **That gap is the dispersion energy**, derived from first principles in your own code.
+
+Defer DMC until VMC works on He₂ and reproduces a published number; DMC adds branching walkers, fixed-node projection, and population control (~2–3× the code volume), much harder to debug if VMC isn't already trustworthy.
+
+### Tradeoffs vs GATO
+
+- **Lose:** clean `jax.grad` of energy w.r.t. nuclear positions. VMC energy is a stochastic estimator with sampling noise; nuclear gradients need variance reduction (reweighting, correlated estimators, Hellmann–Feynman with reweighting). Different optimization regime than GATO's deterministic one.
+- **Gain:** correlation captured by construction. Dispersion, static correlation, near-degeneracies — all visible. Antisymmetry is a hard constraint (determinant structure), not a soft penalty.
+- **Architectural cost:** ~$N^3$ per sample × millions of samples per energy. He₂ is feasible on a laptop CPU; anything beyond ~10 electrons wants a GPU. The walker dimension parallelizes embarrassingly.
+
+### Why this beats "add correlation to GATO"
+
+Adding post-HF correlation (MP2, CCSD) on top of GATO's grid would require formulating those methods in real space, which essentially nobody does (they're naturally MO-basis methods with $O(N^7)$ tensor contractions). You'd be writing a Gaussian-basis quantum-chemistry code from scratch, which is not GATO's mission. QMC is **the** correlation method that lives natively in real space — same coordinate system as GATO, different sampling strategy.
+
+### Aside: why R⁻⁶ is called "dispersion"
+
+The name is borrowed from **optics**, and the connection is a derived mathematical identity rather than a casual analogy. In 1930, Fritz London showed that the R⁻⁶ attraction between two neutral atoms can be calculated from a single integral involving each atom's **frequency-dependent polarizability** $\alpha(\omega)$:
+
+$$C_6 \;=\; \frac{3}{\pi}\int_0^\infty \alpha_A(i\omega)\,\alpha_B(i\omega)\,d\omega$$
+
+(the **Casimir–Polder integral**, evaluated along the imaginary-frequency axis). The same $\alpha(\omega)$ determines the refractive index of a gas, $n(\omega) \approx 1 + 2\pi N\,\alpha(\omega)$, whose frequency dependence is called **optical dispersion** — the reason blue light refracts more than red, the reason rainbows exist. So the R⁻⁶ coefficient between atoms is literally an integral over the same dynamical polarizability that causes white light to split into colors.
+
+That equivalence is the etymology. London called the force "dispersion" because its strength is computable from the *dispersion data* of the atom — its absorption spectrum, oscillator strengths, polarizability vs. frequency. Before London, van der Waals (1873) had postulated an empirical R⁻⁶ attraction with no derivation; London's 1930 paper showed two things at once: (1) the attraction comes from correlated quantum fluctuations of the electron clouds (the modern "instantaneous dipole–induced dipole" picture), and (2) the coefficient is fixed by the same atomic transition data you measure with a spectrometer. The optical-dispersion connection wasn't an afterthought — it was the proof that the force was real and quantitative.
+
+**Why the optical connection isn't a coincidence.** Both phenomena come from the same underlying object: the atomic polarizability operator $\hat\alpha(\omega) = \sum_n \frac{|\langle 0|\hat\mu|n\rangle|^2 \cdot 2\omega_n}{\omega_n^2 - \omega^2}$ — a sum over excited states weighted by transition dipole moments. In optics, this controls how the atom responds to an *external* oscillating field (the photon). In the dispersion-force calculation, this controls how atom A responds to atom B's *own* fluctuating field, with the integral over all frequencies giving the binding energy. Same operator, same matrix elements, two physical settings filtered through different geometries.
+
+**Terminology zoo, untangled:**
+- **van der Waals force** — catch-all umbrella for all weak intermolecular forces. Three sub-types: Keesom (permanent dipole–permanent dipole), Debye (permanent dipole–induced dipole), London dispersion (correlated fluctuating dipoles).
+- **London dispersion force** — the universal one. Exists between all pairs of atoms because every atom polarizes in response to fluctuations. The *only* one of the three that operates between two He atoms (no permanent moments → only fluctuation-correlation contributes). This is what `qato`'s He–He demo recovers.
+- **Casimir / Casimir–Polder force** — same physics at longer range where retardation (finite speed of light between fluctuation and response) kicks in. Switches the asymptote from R⁻⁶ to R⁻⁷ at distances $\gtrsim$ atomic transition wavelength (~hundreds of nm).
+
+The satisfying part of `qato`'s terminal demo: VMC will reproduce that R⁻⁶ from a Slater–Jastrow wavefunction with no spectral data input — recovering, from first principles, the same coefficient you could have looked up in a polarizability table. **Dispersion = the frequency dependence of polarizability = the data needed to compute the R⁻⁶ coefficient.** The force is named after how it's calculated, not after what it physically does.
+
+### Connection to GATO's §5.6 FermiNet handoff
+
+QMC is the conceptual bridge to FermiNet. The progression is: Slater–Jastrow VMC → backflow VMC → neural-network VMC (FermiNet/PauliNet). Each step replaces a hand-designed component with a more flexible parameterization, optimized variationally. A `qato` project that gets to Slater–Jastrow He–He puts the reader exactly one architectural step away from FermiNet, and the §5.6 handoff in the GATO README becomes a "and here's where this approach goes next" rather than a black-box reference.
+
+---
+
 ## Rejected / evaluated ideas (record of discussion, not plans)
 
 - **Log-radial as the main 3D grid.** Doesn't generalize to molecules (can't

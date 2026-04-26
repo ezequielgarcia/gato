@@ -1,4 +1,4 @@
-"""Extrapolate helium's RHF (and optionally KS-LDA) energy to zero softening.
+"""Extrapolate helium's RHF energy to zero softening.
 
 On a cell-centered 3D grid the softened Coulomb potential V_ε(r) = -Z/√(r² + ε²)
 and the softened Hartree/exchange kernel 1/√(r² + ε²) both carry a positive
@@ -15,14 +15,14 @@ coefficient is O(ε) (logarithmic integrand from the 1/r singularity), not O(ε�
 so `linear_quadratic` is the default fit model.
 
 Output:
-    - stdout table of E(ε) for RHF (and LDA if --ks-lda)
+    - stdout table of E(ε) for RHF
     - extrapolated E₀ under linear, quadratic, and linear_quadratic fits
-    - residual vs. published reference RHF (-2.862 E_h) / LDA (-2.834 E_h)
+    - residual vs. published reference RHF (-2.862 E_h)
     - optional plot at docs/figures/helium_softening_extrapolation.png
 
 Run:
     uv run python -m benchmarks.helium_softening_extrapolation
-    uv run python -m benchmarks.helium_softening_extrapolation --ks-lda --plot
+    uv run python -m benchmarks.helium_softening_extrapolation --plot
 """
 from __future__ import annotations
 
@@ -34,17 +34,15 @@ import numpy as np
 import gato
 from gato.grid import Grid3D
 from gato.potentials import softened_coulomb
-from gato.scf import scf_ks_lda, scf_rhf
+from gato.scf import scf_rhf
 
 
 # Published references (closed-shell helium ground state, non-relativistic Coulomb)
 _E_RHF_REF = -2.8617
-_E_LDA_REF = -2.8340
 _E_EXACT = -2.9037
 
 
 def run_sweep(
-    method: str,
     N: int,
     L: float,
     epsilons: list[float],
@@ -53,13 +51,12 @@ def run_sweep(
     order: int,
     lanczos_iters: int,
 ) -> list[tuple[float, float, int, bool]]:
-    """Run one SCF per ε, at fixed (N, L). Returns (ε, E, n_iter, converged)."""
+    """Run one RHF SCF per ε, at fixed (N, L). Returns (ε, E, n_iter, converged)."""
     grid = Grid3D(N=N, L=L)
-    solver = scf_rhf if method == "rhf" else scf_ks_lda
     results = []
     for eps in epsilons:
         V_ext = softened_coulomb(grid, Z=2.0, epsilon=eps)
-        res = solver(
+        res = scf_rhf(
             V_ext,
             grid,
             n_occ=1,
@@ -100,9 +97,7 @@ def extrapolate_to_zero(
 
 def maybe_plot(
     rhf_results,
-    lda_results,
     rhf_extrap,
-    lda_extrap,
     out_path: Path,
 ):
     import matplotlib
@@ -117,13 +112,6 @@ def maybe_plot(
     ax.axhline(rhf_extrap, color="C0", linestyle="--", alpha=0.6, label=f"RHF ε→0 fit = {rhf_extrap:+.4f}")
     ax.axhline(_E_RHF_REF, color="C0", linestyle=":", alpha=0.5, label=f"RHF exact = {_E_RHF_REF:+.4f}")
 
-    if lda_results is not None:
-        eps_lda = np.array([r[0] for r in lda_results])
-        E_lda = np.array([r[1] for r in lda_results])
-        ax.plot(eps_lda, E_lda, "s-", label="KS-LDA (measured)", color="C1")
-        ax.axhline(lda_extrap, color="C1", linestyle="--", alpha=0.6, label=f"LDA ε→0 fit = {lda_extrap:+.4f}")
-        ax.axhline(_E_LDA_REF, color="C1", linestyle=":", alpha=0.5, label=f"LDA exact = {_E_LDA_REF:+.4f}")
-
     ax.set_xlabel("softening ε (Bohr)")
     ax.set_ylabel("helium ground-state energy (Hartree)")
     ax.set_title("Helium softening extrapolation, N=64 L=10, order=4")
@@ -135,8 +123,8 @@ def maybe_plot(
     print(f"\nwrote figure {out_path}")
 
 
-def _report(method: str, results, reference: float):
-    print(f"\n{method.upper()} extrapolation (reference {reference:+.4f} E_h):")
+def _report(results, reference: float):
+    print(f"\nRHF extrapolation (reference {reference:+.4f} E_h):")
     for model in ("linear", "quadratic", "linear_quadratic"):
         E0, _ = extrapolate_to_zero(results, model=model)
         err = E0 - reference
@@ -163,7 +151,6 @@ def main():
         default=None,
         help="override the default ε sweep (in Bohr)",
     )
-    parser.add_argument("--ks-lda", action="store_true", help="also run KS-LDA extrapolation")
     parser.add_argument("--plot", action="store_true", help="save figure to docs/figures/")
     args = parser.parse_args()
 
@@ -183,30 +170,18 @@ def main():
 
     print("RHF sweep:")
     rhf_results = run_sweep(
-        "rhf", args.N, args.L, epsilons,
+        args.N, args.L, epsilons,
         args.mixing, args.max_iters, args.order, args.lanczos_iters,
     )
-    rhf_E0 = _report("rhf", rhf_results, _E_RHF_REF)
-
-    lda_results = None
-    lda_E0 = None
-    if args.ks_lda:
-        print("\nKS-LDA sweep:")
-        lda_results = run_sweep(
-            "ks_lda", args.N, args.L, epsilons,
-            args.mixing, args.max_iters, args.order, args.lanczos_iters,
-        )
-        lda_E0 = _report("ks_lda", lda_results, _E_LDA_REF)
+    rhf_E0 = _report(rhf_results, _E_RHF_REF)
 
     if args.plot:
         out = Path("docs/figures/helium_softening_extrapolation.png")
-        maybe_plot(rhf_results, lda_results, rhf_E0, lda_E0 or rhf_E0, out)
+        maybe_plot(rhf_results, rhf_E0, out)
 
     print()
     print("=" * 72)
     print(f"RHF    ε→0 = {rhf_E0:+.5f} Ha, residual vs reference = {(rhf_E0 - _E_RHF_REF)*1e3:+.2f} mHa")
-    if lda_E0 is not None:
-        print(f"LDA    ε→0 = {lda_E0:+.5f} Ha, residual vs reference = {(lda_E0 - _E_LDA_REF)*1e3:+.2f} mHa")
     print(f"exact (non-rel, full CI):      {_E_EXACT:+.5f} Ha")
 
 

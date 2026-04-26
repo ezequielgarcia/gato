@@ -1,5 +1,13 @@
 """Restricted Hartree–Fock self-consistent-field solver on a real-space grid.
 
+This is the **single SCF method** in GATO. The project is deliberately scoped
+to ab-initio mean-field RHF — no DFT, no XC functionals — so that every
+emergent observable (geometry, polarity, hybridization, atomization energy)
+can be traced to exactly three ingredients: Schrödinger, Pauli antisymmetry
+(Slater determinant), and the mean-field factorization. Correlation lives in
+the sibling project `qato` (variational Monte Carlo on He–He); see IDEAS.md.
+
+
 Closed-shell RHF: each spatial orbital $\\phi_i$ is doubly occupied (one spin-up,
 one spin-down electron). The total density is
 
@@ -37,11 +45,11 @@ sufficient for atoms like helium with a well-conditioned initial guess.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
 
-from .functionals import lda_xc_energy, lda_xc_potential
 from .grid import Grid3D, inner_product, integrate
 from .hamiltonian import Hamiltonian
 from .operators import kinetic
@@ -82,6 +90,10 @@ class RHFFock:
 
     Duck-types as a `Hamiltonian` (exposes `.grid` and `.apply`), so the
     existing Lanczos solver accepts it without modification.
+
+    `V_ext` is the multiplicative external (or pseudopotential local) part.
+    `V_nl_apply`, when provided, is a callable ψ → V_nl ψ implementing the
+    non-local pseudopotential action; pass `None` for the all-electron case.
     """
 
     grid: Grid3D
@@ -90,6 +102,7 @@ class RHFFock:
     boundary: str = "dirichlet"
     order: int = 4
     epsilon: float | None = None
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None
 
     def density(self) -> jax.Array:
         return _density(self.orbitals)
@@ -99,6 +112,8 @@ class RHFFock:
 
     def apply(self, psi: jax.Array) -> jax.Array:
         h_psi = kinetic(psi, self.grid.h, self.boundary, self.order) + self.V_ext * psi
+        if self.V_nl_apply is not None:
+            h_psi = h_psi + self.V_nl_apply(psi)
         J_psi = self.hartree() * psi
         K_psi = exchange_apply(psi, self.orbitals, self.grid, epsilon=self.epsilon)
         return h_psi + J_psi - K_psi
@@ -111,12 +126,16 @@ def rhf_energy(
     boundary: str = "dirichlet",
     order: int = 4,
     epsilon: float | None = None,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
 ) -> jax.Array:
     """Total closed-shell RHF energy E = 2 Σ_i ⟨φ_i|ĥ|φ_i⟩ + E_H[ρ] + E_x.
 
     `epsilon` controls the softening of the Hartree/exchange kernel; it is
     independent of the softening baked into `V_ext` so that both can be swept
     together when extrapolating to the bare-Coulomb limit.
+
+    `V_nl_apply`, if provided, contributes 2 Σ_i ⟨φ_i|V_nl|φ_i⟩ to the
+    one-body energy. Used for non-local pseudopotentials.
     """
     n_orb = orbitals.shape[-1]
 
@@ -124,6 +143,8 @@ def rhf_energy(
     for i in range(n_orb):
         phi = orbitals[..., i]
         h_phi = kinetic(phi, grid.h, boundary, order) + V_ext * phi
+        if V_nl_apply is not None:
+            h_phi = h_phi + V_nl_apply(phi)
         E_h1 = E_h1 + inner_product(phi, h_phi, grid).real
     E_h1 = 2.0 * E_h1
 
@@ -197,12 +218,16 @@ def scf_rhf(
     order: int = 4,
     lanczos_iters: int = 60,
     epsilon: float | None = None,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
 ) -> SCFResult:
     """Drive the closed-shell RHF SCF loop to self-consistency.
 
     Parameters
     ----------
     V_ext : one-electron external potential on the grid, shape (N, N, N).
+        For all-electron calculations this is the (softened) Coulomb sum;
+        for pseudopotential calculations this is the local part of the
+        pseudopotential.
     grid : Grid3D the potential is sampled on.
     n_occ : number of doubly-occupied spatial orbitals (= electrons / 2).
     initial_orbitals : optional (N, N, N, n_occ) guess. Defaults to the
@@ -215,6 +240,7 @@ def scf_rhf(
         damps oscillations for hard-to-converge systems.
     boundary, order : passed through to the kinetic stencil.
     lanczos_iters : Krylov dimension for each Fock diagonalization.
+    V_nl_apply : optional non-local pseudopotential action ψ → V_nl ψ.
     """
     if initial_orbitals is None:
         orbitals = _default_initial_orbitals(
@@ -246,6 +272,7 @@ def scf_rhf(
             boundary=boundary,
             order=order,
             epsilon=epsilon,
+            V_nl_apply=V_nl_apply,
         )
         res = lanczos(fock, orbitals[..., 0], n_iters=lanczos_iters, n_eigenstates=n_occ)
         new_orbitals = res.eigenstates
@@ -255,122 +282,10 @@ def scf_rhf(
         rho = mixing * rho_new + (1.0 - mixing) * rho
         orbitals = new_orbitals
 
-        E = float(rhf_energy(orbitals, V_ext, grid, boundary, order, epsilon=epsilon))
-        history.append(E)
-
-        if abs(E - E_prev) < tol:
-            converged = True
-            break
-        E_prev = E
-
-    return SCFResult(
-        orbitals=orbitals,
-        energy=E,
-        orbital_energies=orbital_energies,
-        n_iters=it,
-        converged=converged,
-        energy_history=history,
-    )
-
-
-def ks_lda_energy(
-    orbitals: jax.Array,
-    V_ext: jax.Array,
-    grid: Grid3D,
-    boundary: str = "dirichlet",
-    order: int = 4,
-    epsilon: float | None = None,
-) -> jax.Array:
-    """Total Kohn–Sham LDA energy $E = 2\\Sigma_i ⟨\\phi_i|\\hat h|\\phi_i⟩ + E_H[\\rho] + E_{xc}^{LDA}[\\rho]$.
-
-    Same one-body / Hartree terms as RHF, but the exchange operator is
-    replaced by the pointwise LDA exchange–correlation functional. No per-pair
-    Poisson solves — the $n_\\text{orb}^2$ cost of exact exchange is gone.
-    """
-    n_orb = orbitals.shape[-1]
-    E_h1 = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        h_phi = kinetic(phi, grid.h, boundary, order) + V_ext * phi
-        E_h1 = E_h1 + inner_product(phi, h_phi, grid).real
-    E_h1 = 2.0 * E_h1
-
-    rho = _density(orbitals)
-    E_H = hartree_energy(rho, grid, epsilon=epsilon)
-    E_xc = lda_xc_energy(rho, grid)
-    return E_h1 + E_H + E_xc
-
-
-@dataclass(frozen=True)
-class _KSFock:
-    """Kohn–Sham one-electron operator with LDA XC.
-
-    $\\hat F_{KS} \\psi = \\hat h \\psi + (V_H(r) + V_{xc}(r))\\,\\psi$.
-    Local multiplicative potential — no exchange operator, no per-orbital
-    Poisson solves per apply.
-    """
-
-    grid: Grid3D
-    V_eff: jax.Array  # = V_ext + V_H + V_xc, precomputed once per SCF iter
-    boundary: str = "dirichlet"
-    order: int = 4
-
-    def apply(self, psi: jax.Array) -> jax.Array:
-        return kinetic(psi, self.grid.h, self.boundary, self.order) + self.V_eff * psi
-
-
-def scf_ks_lda(
-    V_ext: jax.Array,
-    grid: Grid3D,
-    n_occ: int,
-    *,
-    initial_orbitals: jax.Array | None = None,
-    max_iters: int = 50,
-    tol: float = 1e-6,
-    mixing: float = 1.0,
-    boundary: str = "dirichlet",
-    order: int = 4,
-    lanczos_iters: int = 60,
-    epsilon: float | None = None,
-) -> SCFResult:
-    """Closed-shell Kohn–Sham DFT with LDA exchange–correlation.
-
-    Same interface as :func:`scf_rhf`. The only structural difference is that
-    the Fock operator has a purely local effective potential
-    $V_\\text{eff} = V_\\text{ext} + V_H[\\rho] + V_\\text{xc}^{LDA}[\\rho]$,
-    so each SCF diagonalization is cheaper than the RHF variant (no exchange
-    operator, no per-pair Poisson solves).
-    """
-    if initial_orbitals is None:
-        orbitals = _default_initial_orbitals(
-            V_ext, grid, n_occ, boundary, order, lanczos_iters
-        )
-    else:
-        orbitals = initial_orbitals
-
-    history: list[float] = []
-    rho = _density(orbitals)
-    E_prev = float("inf")
-    E = float("inf")
-    orbital_energies = jnp.zeros(n_occ)
-    converged = False
-    it = 0
-
-    for it in range(1, max_iters + 1):
-        V_H = hartree_potential(rho, grid, epsilon=epsilon)
-        V_xc = lda_xc_potential(rho)
-        V_eff = V_ext + V_H + V_xc
-        ks = _KSFock(grid=grid, V_eff=V_eff, boundary=boundary, order=order)
-
-        res = lanczos(ks, orbitals[..., 0], n_iters=lanczos_iters, n_eigenstates=n_occ)
-        new_orbitals = res.eigenstates
-        orbital_energies = res.eigenvalues
-
-        rho_new = _density(new_orbitals)
-        rho = mixing * rho_new + (1.0 - mixing) * rho
-        orbitals = new_orbitals
-
-        E = float(ks_lda_energy(orbitals, V_ext, grid, boundary, order, epsilon=epsilon))
+        E = float(rhf_energy(
+            orbitals, V_ext, grid, boundary, order,
+            epsilon=epsilon, V_nl_apply=V_nl_apply,
+        ))
         history.append(E)
 
         if abs(E - E_prev) < tol:
@@ -396,6 +311,8 @@ class _MixedFock:
     The Hartree potential array `V_H` is stored, not the density — so every
     `apply` call is one kinetic + two multiplies + the n_orb Poisson solves
     that the exchange operator requires, rather than also redoing `J[ρ]`.
+
+    `V_nl_apply` carries the non-local pseudopotential action when present.
     """
 
     grid: Grid3D
@@ -405,9 +322,12 @@ class _MixedFock:
     boundary: str = "dirichlet"
     order: int = 4
     epsilon: float | None = None
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None
 
     def apply(self, psi: jax.Array) -> jax.Array:
         h_psi = kinetic(psi, self.grid.h, self.boundary, self.order) + self.V_ext * psi
+        if self.V_nl_apply is not None:
+            h_psi = h_psi + self.V_nl_apply(psi)
         J_psi = self.V_H * psi
         K_psi = exchange_apply(psi, self.orbitals, self.grid, epsilon=self.epsilon)
         return h_psi + J_psi - K_psi

@@ -1,5 +1,19 @@
 """End-to-end Phase 2 driver: the hydrogen molecular ion H₂⁺.
 
+Pedagogical role
+----------------
+The simplest possible *molecule*: one electron, two nuclei. Sits between
+Phase 1 (one electron, one nucleus, hydrogen) and Phase 3 (two electrons,
+one nucleus, helium) on the conceptual ladder. Demonstrates the
+Born–Oppenheimer separation, the multi-center Coulomb potential, the
+Hellmann–Feynman force, and gradient-descent geometry optimization —
+each of which is reused unchanged by the Phase 4 H₂O driver.
+
+Reuses the GATO core stack: :mod:`gato.geometry` for ``Nuclei`` and
+``nuclear_repulsion``, :mod:`gato.potentials` for the multi-center
+softened Coulomb, :mod:`gato.hamiltonian` and :mod:`gato.solvers` for
+the imaginary-time electronic solve, and ``jax.grad`` for forces.
+
 Physics
 -------
 One electron shared between two protons. In the Born–Oppenheimer

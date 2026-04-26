@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 gato = "gato:main"
 gato-hydrogen = "gato.physics.hydrogen:main"
+gato-helium = "gato.physics.helium:main"
 gato-h2plus = "gato.physics.h2_plus:main"
 
 [tool.pytest.ini_options]
