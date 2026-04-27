@@ -484,7 +484,7 @@ The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6
 
 All Phase 1, 2, and 3 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and runs unchanged on GPU via `uv sync --extra gpu`; on an RTX 5070 the same Phase 3 helium extrapolation is expected in single-digit minutes, and the Be/Ne benchmarks become tractable.
 
-Next up: **Phase 4** — RHF on H₂O with HGH pseudopotentials and geometry from `jax.grad` on the converged SCF energy. Code is wired in (`pseudopotentials.py`, `physics/water.py`) but not yet validated end-to-end.
+**Phase 4 is wired but not yet quantitatively validated.** The HGH pseudopotential module (`pseudopotentials.py`) has analytic-form smoke tests covering the long-range Coulomb tail, the value at the origin, radial projector normalization, non-local Hermiticity, and differentiability in nuclear positions (11 tests, all passing). The water driver (`physics/water.py`) runs end-to-end on a 32³ grid: SCF converges in ~20 iterations to four doubly-occupied valence MOs, and `jax.grad` of the BO energy returns finite Hellmann–Feynman forces pointing in physically sensible directions. The remaining work is the geometry-relaxation regression — does Adam on positions actually recover the experimental angle and bond length on a finer grid — which is the next milestone.
 
 ---
 
