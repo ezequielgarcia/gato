@@ -39,7 +39,6 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import optax
 
 from .. import enable_x64
 from ..geometry import (
@@ -47,8 +46,8 @@ from ..geometry import (
     bond_angle,
     bond_length,
     nuclear_repulsion,
-    recenter,
 )
+from ..geometry_opt import optimize_geometry_alternating
 from ..grid import Grid3D
 from ..pseudopotentials import (
     HGHParams,
@@ -270,48 +269,42 @@ def optimize_water_geometry(
     learning_rate : Adam step size in Bohr per gradient unit. 0.05 is a
         reasonable default; smaller values for fragile starting geometries.
     """
-    nuclei = recenter(initial_nuclei)
-    optimizer = optax.adam(learning_rate)
-    opt_state = optimizer.init(nuclei.positions)
-
-    trajectory: list[tuple[int, float, float, float]] = []
-
-    current = solve_rhf_at_geometry(
-        nuclei, elements, grid,
-        max_iters=scf_max_iters, tol=scf_tol, mixing=scf_mixing, order=order,
-    )
-
-    for step in range(geom_steps):
-        grad_R = jax.grad(bo_energy, argnums=0)(
-            current.nuclei.positions,
-            current.nuclei.charges,
-            current.orbitals,
-            elements,
-            grid,
-            order,
-        )
-        updates, opt_state = optimizer.update(grad_R, opt_state)
-        new_positions = optax.apply_updates(current.nuclei.positions, updates)
-        nuclei = recenter(Nuclei(new_positions, current.nuclei.charges))
-
-        current = solve_rhf_at_geometry(
+    def solve_at(nuclei: Nuclei, prev: WaterPoint | None) -> WaterPoint:
+        init_orb = prev.orbitals if prev is not None else None
+        return solve_rhf_at_geometry(
             nuclei, elements, grid,
-            initial_orbitals=current.orbitals,
+            initial_orbitals=init_orb,
             max_iters=scf_max_iters, tol=scf_tol, mixing=scf_mixing, order=order,
         )
 
-        # O is at index 0; H atoms at 1, 2.
-        R_OH = float(bond_length(nuclei, 0, 1))
-        ang = float(bond_angle(nuclei, 1, 0, 2))
-        trajectory.append((step, current.energy, R_OH, jnp.rad2deg(ang).item()))
+    def bo_grad(p: WaterPoint) -> jax.Array:
+        return jax.grad(bo_energy, argnums=0)(
+            p.nuclei.positions, p.nuclei.charges, p.orbitals,
+            elements, grid, order,
+        )
+
+    trajectory: list[tuple[int, float, float, float]] = []
+
+    def on_step(step: int, p: WaterPoint) -> None:
+        R_OH = float(bond_length(p.nuclei, 0, 1))
+        ang = float(bond_angle(p.nuclei, 1, 0, 2))
+        trajectory.append((step, p.energy, R_OH, jnp.rad2deg(ang).item()))
         if verbose:
             print(
-                f"  geom step {step:3d}  E = {current.energy:+.6f}  "
+                f"  geom step {step:3d}  E = {p.energy:+.6f}  "
                 f"R_OH = {R_OH:.4f} a₀  angle = {jnp.rad2deg(ang):.2f}°  "
-                f"SCF iters = {current.n_iters}"
+                f"SCF iters = {p.n_iters}"
             )
 
-    return WaterGeomOptResult(final=current, trajectory=trajectory)
+    final, _ = optimize_geometry_alternating(
+        initial_nuclei,
+        solve_at_geometry=solve_at,
+        bo_grad=bo_grad,
+        geom_steps=geom_steps,
+        learning_rate=learning_rate,
+        on_step=on_step,
+    )
+    return WaterGeomOptResult(final=final, trajectory=trajectory)
 
 
 # ---------------------------------------------------------------------------

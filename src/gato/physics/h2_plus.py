@@ -48,11 +48,11 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import optax
 
 from .. import enable_x64
 from ..ansatz.grid import init_lcao
-from ..geometry import Nuclei, bond_length, nuclear_repulsion, recenter
+from ..geometry import Nuclei, bond_length, nuclear_repulsion
+from ..geometry_opt import optimize_geometry_alternating
 from ..grid import Grid3D, inner_product, norm_sq, normalize
 from ..hamiltonian import Hamiltonian
 from ..operators import kinetic
@@ -195,34 +195,35 @@ def optimize_geometry(
     """
     if epsilon is None:
         epsilon = grid.h / 2
-    nuclei = recenter(initial_nuclei)
-    optimizer = optax.adam(learning_rate)
-    opt_state = optimizer.init(nuclei.positions)
 
-    trajectory: list[tuple[int, float, float]] = []
-    current = solve_electronic(
-        nuclei, grid, epsilon=epsilon, n_steps=electronic_steps, order=order,
-    )
-
-    for step in range(geom_steps):
-        grad_R = jax.grad(bo_energy, argnums=0)(
-            current.nuclei.positions,
-            current.nuclei.charges,
-            current.psi,
-            grid, epsilon, order,
-        )
-        updates, opt_state = optimizer.update(grad_R, opt_state)
-        new_positions = optax.apply_updates(current.nuclei.positions, updates)
-        nuclei = recenter(Nuclei(new_positions, current.nuclei.charges))
-        current = solve_electronic(
+    def solve_at(nuclei: Nuclei, _prev: SolvePoint | None) -> SolvePoint:
+        return solve_electronic(
             nuclei, grid, epsilon=epsilon, n_steps=electronic_steps, order=order,
         )
-        R_ij = float(bond_length(nuclei, 0, 1)) if nuclei.n >= 2 else float("nan")
-        trajectory.append((step, current.energy, R_ij))
-        if verbose:
-            print(f"  geom step {step:3d}  E = {current.energy:+.6f}  R₀₁ = {R_ij:.4f}")
 
-    return GeomOptResult(final=current, trajectory=trajectory)
+    def bo_grad(point: SolvePoint) -> jax.Array:
+        return jax.grad(bo_energy, argnums=0)(
+            point.nuclei.positions, point.nuclei.charges, point.psi,
+            grid, epsilon, order,
+        )
+
+    trajectory: list[tuple[int, float, float]] = []
+
+    def on_step(step: int, p: SolvePoint) -> None:
+        R_ij = float(bond_length(p.nuclei, 0, 1)) if p.nuclei.n >= 2 else float("nan")
+        trajectory.append((step, p.energy, R_ij))
+        if verbose:
+            print(f"  geom step {step:3d}  E = {p.energy:+.6f}  R₀₁ = {R_ij:.4f}")
+
+    final, _ = optimize_geometry_alternating(
+        initial_nuclei,
+        solve_at_geometry=solve_at,
+        bo_grad=bo_grad,
+        geom_steps=geom_steps,
+        learning_rate=learning_rate,
+        on_step=on_step,
+    )
+    return GeomOptResult(final=final, trajectory=trajectory)
 
 
 # ---------------------------------------------------------------------------
