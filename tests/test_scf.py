@@ -25,7 +25,7 @@ import pytest
 
 from gato.grid import Grid3D, inner_product, normalize
 from gato.potentials import softened_coulomb
-from gato.scf import _MixedFock, exchange_apply, rhf_energy, scf_rhf
+from gato.scf import RHFFock, exchange_apply, rhf_energy, scf_rhf
 from gato.solvers.poisson import hartree_potential
 
 gpu_only = pytest.mark.skipif(
@@ -61,7 +61,7 @@ def test_fock_with_zero_orbitals_is_core_hamiltonian():
 
     from gato.hamiltonian import Hamiltonian
 
-    fock = _MixedFock(grid=grid, V_ext=V_ext, orbitals=zero_orb, V_H=V_H, order=4)
+    fock = RHFFock(grid=grid, V_ext=V_ext, orbitals=zero_orb, V_H=V_H, order=4)
     H_core = Hamiltonian(grid=grid, V=V_ext, order=4)
 
     psi = _normalized_gaussian(grid, alpha=1.5)

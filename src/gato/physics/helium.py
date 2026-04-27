@@ -29,15 +29,13 @@ import jax
 import jax.numpy as jnp
 
 from .. import enable_x64
-from ..grid import Grid3D, inner_product
-from ..operators import kinetic
+from ..grid import Grid3D
 from ..potentials import softened_coulomb
 from ..scf import (
     _density,
-    exchange_apply,
+    decompose_rhf_energy,
     scf_rhf,
 )
-from ..solvers.poisson import hartree_energy
 
 
 @dataclass
@@ -57,41 +55,6 @@ class HeliumResult:
     n_iters: int
     converged: bool
     history: list[tuple[int, float]]
-
-
-def _energy_decomposition(
-    orbitals: jax.Array,
-    V_ext: jax.Array,
-    grid: Grid3D,
-    *,
-    boundary: str,
-    order: int,
-    epsilon: float | None,
-) -> tuple[float, float, float, float]:
-    """Return (T, V_ext_exp, E_H, E_x) for closed-shell RHF orbitals."""
-    n_orb = orbitals.shape[-1]
-
-    T = 0.0
-    V_exp = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        T_phi = kinetic(phi, grid.h, boundary, order)
-        T = T + inner_product(phi, T_phi, grid).real
-        V_exp = V_exp + inner_product(phi, V_ext * phi, grid).real
-    T = 2.0 * float(T)
-    V_exp = 2.0 * float(V_exp)
-
-    rho = _density(orbitals)
-    E_H = float(hartree_energy(rho, grid, epsilon=epsilon))
-
-    E_x = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        K_phi = exchange_apply(phi, orbitals, grid, epsilon=epsilon)
-        E_x = E_x - inner_product(phi, K_phi, grid).real
-    E_x = float(E_x)
-
-    return T, V_exp, E_H, E_x
 
 
 def solve_helium(
@@ -131,10 +94,14 @@ def solve_helium(
     orbitals = result.orbitals
     rho = _density(orbitals)
 
-    T, V_exp, E_H, E_x = _energy_decomposition(
+    terms = decompose_rhf_energy(
         orbitals, V_ext, grid,
         boundary="dirichlet", order=order, epsilon=epsilon,
     )
+    T = float(terms.kinetic)
+    V_exp = float(terms.v_ext)
+    E_H = float(terms.hartree)
+    E_x = float(terms.exchange)
 
     # Coulomb virial diagnostic: for an exact Coulomb eigenstate the total
     # potential V_total = ⟨V_ext⟩ + ⟨V_ee⟩ satisfies 2⟨T⟩ + ⟨V_total⟩ = 0.

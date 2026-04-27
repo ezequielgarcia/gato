@@ -50,7 +50,7 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 
-from .grid import Grid3D, inner_product, integrate
+from .grid import Grid3D, inner_product
 from .hamiltonian import Hamiltonian
 from .operators import kinetic
 from .solvers.lanczos import lanczos
@@ -92,6 +92,9 @@ class RHFFock:
     existing Lanczos solver accepts it without modification.
 
     `V_ext` is the multiplicative external (or pseudopotential local) part.
+    `V_H`, when provided, is a precomputed Hartree potential (e.g. from a
+    linearly-mixed density inside the SCF loop); when `None`, the Hartree
+    potential is rebuilt from `orbitals` on every `apply`.
     `V_nl_apply`, when provided, is a callable ψ → V_nl ψ implementing the
     non-local pseudopotential action; pass `None` for the all-electron case.
     """
@@ -99,6 +102,7 @@ class RHFFock:
     grid: Grid3D
     V_ext: jax.Array
     orbitals: jax.Array
+    V_H: jax.Array | None = None
     boundary: str = "dirichlet"
     order: int = 4
     epsilon: float | None = None
@@ -108,6 +112,8 @@ class RHFFock:
         return _density(self.orbitals)
 
     def hartree(self) -> jax.Array:
+        if self.V_H is not None:
+            return self.V_H
         return hartree_potential(self.density(), self.grid, epsilon=self.epsilon)
 
     def apply(self, psi: jax.Array) -> jax.Array:
@@ -117,6 +123,93 @@ class RHFFock:
         J_psi = self.hartree() * psi
         K_psi = exchange_apply(psi, self.orbitals, self.grid, epsilon=self.epsilon)
         return h_psi + J_psi - K_psi
+
+
+# ---------------------------------------------------------------------------
+# Energy decomposition
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RHFEnergyTerms:
+    """Closed-shell RHF total energy split into physically meaningful pieces.
+
+    All terms are jax scalars (not Python floats) so the whole structure is
+    differentiable and jit-friendly. Cast individual fields with `float(...)`
+    at the reporting boundary.
+
+        total = kinetic + v_ext + v_nl + hartree + exchange
+
+    The one-body terms are already multiplied by the closed-shell occupation
+    factor of 2.
+    """
+
+    kinetic: jax.Array     # 2 Σ_i ⟨φ_i| T̂ |φ_i⟩
+    v_ext: jax.Array       # 2 Σ_i ⟨φ_i| V_ext |φ_i⟩
+    v_nl: jax.Array        # 2 Σ_i ⟨φ_i| V_nl |φ_i⟩  (zero when V_nl_apply is None)
+    hartree: jax.Array     # E_H[ρ]
+    exchange: jax.Array    # E_x
+
+    @property
+    def one_body(self) -> jax.Array:
+        return self.kinetic + self.v_ext + self.v_nl
+
+    @property
+    def total(self) -> jax.Array:
+        return self.kinetic + self.v_ext + self.v_nl + self.hartree + self.exchange
+
+
+def decompose_rhf_energy(
+    orbitals: jax.Array,
+    V_ext: jax.Array,
+    grid: Grid3D,
+    *,
+    boundary: str = "dirichlet",
+    order: int = 4,
+    epsilon: float | None = None,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
+) -> RHFEnergyTerms:
+    """Compute every term of the closed-shell RHF total energy.
+
+    Single source of truth for the energy decomposition: `rhf_energy` returns
+    `.total` from this; the helium and water drivers consume the structured
+    breakdown directly.
+
+    `epsilon` controls the softening of the Hartree/exchange kernel; it is
+    independent of the softening baked into `V_ext` so that both can be swept
+    together when extrapolating to the bare-Coulomb limit.
+    """
+    n_orb = orbitals.shape[-1]
+    zero = jnp.asarray(0.0, dtype=V_ext.dtype)
+
+    T = zero
+    V_ext_exp = zero
+    V_nl_exp = zero
+    for i in range(n_orb):
+        phi = orbitals[..., i]
+        T_phi = kinetic(phi, grid.h, boundary, order)
+        T = T + inner_product(phi, T_phi, grid).real
+        V_ext_exp = V_ext_exp + inner_product(phi, V_ext * phi, grid).real
+        if V_nl_apply is not None:
+            V_nl_exp = V_nl_exp + inner_product(phi, V_nl_apply(phi), grid).real
+    T = 2.0 * T
+    V_ext_exp = 2.0 * V_ext_exp
+    V_nl_exp = 2.0 * V_nl_exp
+
+    E_H = hartree_energy(_density(orbitals), grid, epsilon=epsilon)
+
+    E_x = zero
+    for i in range(n_orb):
+        phi = orbitals[..., i]
+        K_phi = exchange_apply(phi, orbitals, grid, epsilon=epsilon)
+        E_x = E_x - inner_product(phi, K_phi, grid).real
+
+    return RHFEnergyTerms(
+        kinetic=T,
+        v_ext=V_ext_exp,
+        v_nl=V_nl_exp,
+        hartree=E_H,
+        exchange=E_x,
+    )
 
 
 def rhf_energy(
@@ -130,33 +223,14 @@ def rhf_energy(
 ) -> jax.Array:
     """Total closed-shell RHF energy E = 2 Σ_i ⟨φ_i|ĥ|φ_i⟩ + E_H[ρ] + E_x.
 
-    `epsilon` controls the softening of the Hartree/exchange kernel; it is
-    independent of the softening baked into `V_ext` so that both can be swept
-    together when extrapolating to the bare-Coulomb limit.
-
-    `V_nl_apply`, if provided, contributes 2 Σ_i ⟨φ_i|V_nl|φ_i⟩ to the
-    one-body energy. Used for non-local pseudopotentials.
+    Thin wrapper over `decompose_rhf_energy(...).total`. Use the decomposition
+    directly when you also want the per-term breakdown (e.g. virial diagnostic).
     """
-    n_orb = orbitals.shape[-1]
-
-    E_h1 = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        h_phi = kinetic(phi, grid.h, boundary, order) + V_ext * phi
-        if V_nl_apply is not None:
-            h_phi = h_phi + V_nl_apply(phi)
-        E_h1 = E_h1 + inner_product(phi, h_phi, grid).real
-    E_h1 = 2.0 * E_h1
-
-    E_H = hartree_energy(_density(orbitals), grid, epsilon=epsilon)
-
-    E_x = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        K_phi = exchange_apply(phi, orbitals, grid, epsilon=epsilon)
-        E_x = E_x - inner_product(phi, K_phi, grid).real
-
-    return E_h1 + E_H + E_x
+    return decompose_rhf_energy(
+        orbitals, V_ext, grid,
+        boundary=boundary, order=order,
+        epsilon=epsilon, V_nl_apply=V_nl_apply,
+    ).total
 
 
 def _default_initial_orbitals(
@@ -264,7 +338,7 @@ def scf_rhf(
         # enters the Hartree term; for the exchange operator we use the current
         # orbitals directly, which is the standard Pulay / density-mixing choice.
         V_H = hartree_potential(rho, grid, epsilon=epsilon)
-        fock = _MixedFock(
+        fock = RHFFock(
             grid=grid,
             V_ext=V_ext,
             orbitals=orbitals,
@@ -301,33 +375,3 @@ def scf_rhf(
         converged=converged,
         energy_history=history,
     )
-
-
-@dataclass(frozen=True)
-class _MixedFock:
-    """Fock operator with a precomputed Hartree potential (from a possibly-mixed
-    density) and exchange built on the current orbitals.
-
-    The Hartree potential array `V_H` is stored, not the density — so every
-    `apply` call is one kinetic + two multiplies + the n_orb Poisson solves
-    that the exchange operator requires, rather than also redoing `J[ρ]`.
-
-    `V_nl_apply` carries the non-local pseudopotential action when present.
-    """
-
-    grid: Grid3D
-    V_ext: jax.Array
-    orbitals: jax.Array
-    V_H: jax.Array
-    boundary: str = "dirichlet"
-    order: int = 4
-    epsilon: float | None = None
-    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None
-
-    def apply(self, psi: jax.Array) -> jax.Array:
-        h_psi = kinetic(psi, self.grid.h, self.boundary, self.order) + self.V_ext * psi
-        if self.V_nl_apply is not None:
-            h_psi = h_psi + self.V_nl_apply(psi)
-        J_psi = self.V_H * psi
-        K_psi = exchange_apply(psi, self.orbitals, self.grid, epsilon=self.epsilon)
-        return h_psi + J_psi - K_psi

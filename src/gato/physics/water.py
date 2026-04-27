@@ -57,7 +57,7 @@ from ..pseudopotentials import (
     lookup,
     total_valence_charge,
 )
-from ..scf import scf_rhf
+from ..scf import decompose_rhf_energy, scf_rhf
 
 
 # ---------------------------------------------------------------------------
@@ -202,42 +202,18 @@ def bo_energy(
     intrinsic to ψ and constant under geometry differentiation when ψ is
     held fixed (Hellmann–Feynman).
     """
-    from ..operators import kinetic
-    from ..grid import inner_product
-    from ..scf import _density, exchange_apply
-    from ..solvers.poisson import hartree_energy
-
     nuclei = Nuclei(positions=positions, charges=charges)
-
     V_local = hgh_local_potential(nuclei, elements, grid)
-    n_orb = orbitals.shape[-1]
 
-    # One-body energy (kinetic + V_local + V_nl)
-    E_h1 = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        h_phi = (
-            kinetic(phi, grid.h, "dirichlet", order)
-            + V_local * phi
-            + hgh_nonlocal_apply(phi, nuclei, elements, grid)
-        )
-        E_h1 = E_h1 + inner_product(phi, h_phi, grid).real
-    E_h1 = 2.0 * E_h1
+    def V_nl(psi: jax.Array) -> jax.Array:
+        return hgh_nonlocal_apply(psi, nuclei, elements, grid)
 
-    # Hartree
-    rho = _density(orbitals)
-    E_H = hartree_energy(rho, grid, epsilon=None)
-
-    # Exchange (uses fixed orbitals)
-    E_x = 0.0
-    for i in range(n_orb):
-        phi = orbitals[..., i]
-        K_phi = exchange_apply(phi, orbitals, grid, epsilon=None)
-        E_x = E_x - inner_product(phi, K_phi, grid).real
-
-    E_nn = pp_nuclear_repulsion(nuclei, elements)
-
-    return E_h1 + E_H + E_x + E_nn
+    terms = decompose_rhf_energy(
+        orbitals, V_local, grid,
+        boundary="dirichlet", order=order,
+        epsilon=None, V_nl_apply=V_nl,
+    )
+    return terms.total + pp_nuclear_repulsion(nuclei, elements)
 
 
 def hellmann_feynman_force(
