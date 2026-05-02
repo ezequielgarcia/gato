@@ -7,6 +7,7 @@ from .geometry import (
     Nuclei,
     bond_angle,
     bond_length,
+    diatomic_along_z,
     nuclear_repulsion,
     recenter,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "bond_angle",
     "bond_length",
     "constant",
+    "diatomic_along_z",
     "enable_x64",
     "gradient",
     "harmonic_oscillator",

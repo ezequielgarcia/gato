@@ -47,11 +47,10 @@ import argparse
 from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
 
 from .. import enable_x64
 from ..ansatz.grid import init_lcao
-from ..geometry import Nuclei, bond_length, nuclear_repulsion
+from ..geometry import Nuclei, bond_length, diatomic_along_z, nuclear_repulsion
 from ..geometry_opt import optimize_geometry_alternating
 from ..grid import Grid3D, inner_product, norm_sq, normalize
 from ..hamiltonian import Hamiltonian
@@ -156,11 +155,7 @@ def bo_curve(
     """E(R) for a homonuclear diatomic along the z-axis, atoms at ±R/2."""
     out: list[SolvePoint] = []
     for R in R_values:
-        positions = jnp.array([
-            [0.0, 0.0, -R / 2],
-            [0.0, 0.0, +R / 2],
-        ])
-        nuclei = Nuclei(positions=positions, charges=jnp.asarray([Z, Z]))
+        nuclei = diatomic_along_z(float(R), Z1=Z)
         out.append(solve_electronic(
             nuclei, grid, epsilon=epsilon, n_steps=n_steps, order=order,
         ))
@@ -244,13 +239,7 @@ def main() -> None:
 
     enable_x64()
     grid = Grid3D(N=args.N, L=args.L)
-    initial = Nuclei(
-        positions=jnp.array([
-            [0.0, 0.0, -args.R0 / 2],
-            [0.0, 0.0, +args.R0 / 2],
-        ]),
-        charges=jnp.asarray([1.0, 1.0]),
-    )
+    initial = diatomic_along_z(args.R0, Z1=1.0)
     print(f"H₂⁺ on a {args.N}³ grid, L = {args.L}, stencil order {args.order}")
     print(f"Initial R = {args.R0}  target R_e ≈ 1.997  (Burrau 1927)")
     result = optimize_geometry(

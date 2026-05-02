@@ -28,6 +28,23 @@ class Nuclei(NamedTuple):
         return self.charges.shape[0]
 
 
+def diatomic_along_z(R: float, Z1: float, Z2: float | None = None) -> Nuclei:
+    """Two nuclei on the z-axis, symmetric about the origin: ±R/2.
+
+    Z2 defaults to Z1 (homonuclear). Use this for H₂⁺, H₂, LiH and any
+    Born–Oppenheimer curve sweep over a single internuclear distance.
+    """
+    if Z2 is None:
+        Z2 = Z1
+    return Nuclei(
+        positions=jnp.array([
+            [0.0, 0.0, -R / 2],
+            [0.0, 0.0, +R / 2],
+        ]),
+        charges=jnp.asarray([Z1, Z2]),
+    )
+
+
 def bond_length(nuclei: Nuclei, i: int, j: int) -> jax.Array:
     """|R_i - R_j|."""
     return jnp.linalg.norm(nuclei.positions[i] - nuclei.positions[j])
