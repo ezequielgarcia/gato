@@ -142,8 +142,25 @@ OXYGEN_HGH = HGHParams(
 )
 
 
+LITHIUM_HGH = HGHParams(
+    symbol="Li",
+    Z_ion=1.0,
+    r_loc=0.78755305,
+    c=(-1.89261247, 0.28605968, 0.0, 0.0),
+    projectors=(
+        HGHProjector(ell=0, r=0.66637518, h=((1.85881111,),)),
+        HGHProjector(ell=1, r=1.07930561, h=((-0.00589504,),)),
+    ),
+)
+# HGH-LDA "q1" Li (single 2s valence electron, 1s² core frozen). The s- and
+# p-channel non-local projectors are essential — without them Li underbinds
+# and the dimer geometry is off. Source: CP2K POTENTIAL data file
+# (`Li GTH-PADE-q1`), traceable to Hartwigsen-Goedecker-Hutter 1998 table I.
+
+
 HGH_TABLE: dict[str, HGHParams] = {
     "H": HYDROGEN_HGH,
+    "Li": LITHIUM_HGH,
     "O": OXYGEN_HGH,
 }
 
