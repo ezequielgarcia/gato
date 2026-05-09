@@ -37,15 +37,20 @@ def imaginary_time(
     if dt is None:
         dt = H.grid.h ** 2 / 10.0
 
+    # donate_argnums=0 lets XLA reuse the input ψ buffer for the output
+    # instead of allocating a fresh (N, N, N) array per step. Safe because
+    # the loop rebinds `psi` immediately after the call — the donated array
+    # has no surviving reference.
     @jax.jit
-    def step(psi):
+    def energy(psi):
+        return H.rayleigh(psi)
+
+    def _step_impl(psi):
         Hpsi = H.apply(psi)
         psi_new = psi - dt * Hpsi
         return psi_new / jnp.sqrt(norm_sq(psi_new, H.grid))
 
-    @jax.jit
-    def energy(psi):
-        return H.rayleigh(psi)
+    step = jax.jit(_step_impl, donate_argnums=0)
 
     psi = psi0 / jnp.sqrt(norm_sq(psi0, H.grid))
     steps_hist: list[int] = []
