@@ -45,6 +45,7 @@ sufficient for atoms like helium with a well-conditioned initial guess.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable
 
 import jax
@@ -158,26 +159,18 @@ class RHFEnergyTerms:
         return self.kinetic + self.v_ext + self.v_nl + self.hartree + self.exchange
 
 
-def decompose_rhf_energy(
+@partial(jax.jit, static_argnames=("grid", "boundary", "order", "V_nl_apply"))
+def _decompose_rhf_energy_kernel(
     orbitals: jax.Array,
     V_ext: jax.Array,
     grid: Grid3D,
-    *,
-    boundary: str = "dirichlet",
-    order: int = 4,
-    epsilon: float | None = None,
-    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
-) -> RHFEnergyTerms:
-    """Compute every term of the closed-shell RHF total energy.
-
-    Single source of truth for the energy decomposition: `rhf_energy` returns
-    `.total` from this; the helium and water drivers consume the structured
-    breakdown directly.
-
-    `epsilon` controls the softening of the Hartree/exchange kernel; it is
-    independent of the softening baked into `V_ext` so that both can be swept
-    together when extrapolating to the bare-Coulomb limit.
-    """
+    boundary: str,
+    order: int,
+    epsilon: jax.Array,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Returns (kinetic, v_ext, v_nl, hartree, exchange) as a tuple so the
+    JIT'd function returns a plain pytree; the dataclass is built outside."""
     n_orb = orbitals.shape[-1]
     zero = jnp.asarray(0.0, dtype=V_ext.dtype)
 
@@ -203,6 +196,34 @@ def decompose_rhf_energy(
         K_phi = exchange_apply(phi, orbitals, grid, epsilon=epsilon)
         E_x = E_x - inner_product(phi, K_phi, grid).real
 
+    return T, V_ext_exp, V_nl_exp, E_H, E_x
+
+
+def decompose_rhf_energy(
+    orbitals: jax.Array,
+    V_ext: jax.Array,
+    grid: Grid3D,
+    *,
+    boundary: str = "dirichlet",
+    order: int = 4,
+    epsilon: float | None = None,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
+) -> RHFEnergyTerms:
+    """Compute every term of the closed-shell RHF total energy.
+
+    Single source of truth for the energy decomposition: `rhf_energy` returns
+    `.total` from this; the helium and water drivers consume the structured
+    breakdown directly.
+
+    `epsilon` controls the softening of the Hartree/exchange kernel; it is
+    independent of the softening baked into `V_ext` so that both can be swept
+    together when extrapolating to the bare-Coulomb limit.
+    """
+    if epsilon is None:
+        epsilon = grid.h / 2
+    T, V_ext_exp, V_nl_exp, E_H, E_x = _decompose_rhf_energy_kernel(
+        orbitals, V_ext, grid, boundary, order, epsilon, V_nl_apply,
+    )
     return RHFEnergyTerms(
         kinetic=T,
         v_ext=V_ext_exp,

@@ -18,6 +18,8 @@ regularized.
 """
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -42,6 +44,19 @@ def _coulomb_kernel(N: int, h: float, epsilon: float) -> jax.Array:
     return 1.0 / jnp.sqrt(X * X + Y * Y + Z * Z + epsilon * epsilon)
 
 
+@partial(jax.jit, static_argnames=("grid",))
+def _hartree_potential_kernel(rho: jax.Array, grid: Grid3D, epsilon: jax.Array) -> jax.Array:
+    N, h = grid.N, grid.h
+    M = 2 * N
+    G = _coulomb_kernel(N, h, epsilon)
+    rho_pad = jnp.zeros((M, M, M), dtype=rho.dtype).at[:N, :N, :N].set(rho)
+    J_pad = jnp.fft.irfftn(
+        jnp.fft.rfftn(rho_pad) * jnp.fft.rfftn(G),
+        s=(M, M, M),
+    )
+    return J_pad[:N, :N, :N] * grid.dV
+
+
 def hartree_potential(
     rho: jax.Array,
     grid: Grid3D,
@@ -61,21 +76,17 @@ def hartree_potential(
     """
     if epsilon is None:
         epsilon = grid.h / 2
-    N, h = grid.N, grid.h
-    M = 2 * N
+    return _hartree_potential_kernel(rho, grid, epsilon)
 
-    G = _coulomb_kernel(N, h, epsilon)
 
-    rho_pad = jnp.zeros((M, M, M), dtype=rho.dtype).at[:N, :N, :N].set(rho)
-
-    J_pad = jnp.fft.irfftn(
-        jnp.fft.rfftn(rho_pad) * jnp.fft.rfftn(G),
-        s=(M, M, M),
-    )
-    return J_pad[:N, :N, :N] * grid.dV
+@partial(jax.jit, static_argnames=("grid",))
+def _hartree_energy_kernel(rho: jax.Array, grid: Grid3D, epsilon: jax.Array) -> jax.Array:
+    J = _hartree_potential_kernel(rho, grid, epsilon)
+    return 0.5 * integrate(rho * J, grid)
 
 
 def hartree_energy(rho: jax.Array, grid: Grid3D, epsilon: float | None = None) -> jax.Array:
     """E_H = (1/2) ∫ ρ(r) J(r) dV, the classical electron–electron repulsion."""
-    J = hartree_potential(rho, grid, epsilon=epsilon)
-    return 0.5 * integrate(rho * J, grid)
+    if epsilon is None:
+        epsilon = grid.h / 2
+    return _hartree_energy_kernel(rho, grid, epsilon)
