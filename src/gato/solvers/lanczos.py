@@ -14,11 +14,18 @@ run and is the numerically stable choice for m up to a few hundred. For
 serious production use, periodic (partial) reorthogonalization is more
 efficient; this is left for future work.
 
+The outer iteration is a `lax.fori_loop` over a fixed-size pre-allocated
+Krylov buffer, with the inner reorthogonalization a nested `lax.fori_loop`
+over the populated prefix. Everything stays in jax-scalar arithmetic — no
+`float()` casts force device-host syncs — so on GPU all `n_iters` matvecs
+launch as one fused while-loop without Python dispatch in between.
+
 Usage::
 
     from gato.solvers.lanczos import lanczos
-    evals, eigenstates = lanczos(H, psi0, n_iters=80, n_eigenstates=4)
-    # evals[0] is the ground-state energy; eigenstates[..., 0] is ψ₀.
+    res = lanczos(H, psi0, n_iters=80, n_eigenstates=4)
+    # res.eigenvalues[0] is the ground-state energy
+    # res.eigenstates[..., 0] is ψ₀.
 """
 from __future__ import annotations
 
@@ -36,7 +43,7 @@ class LanczosResult:
     eigenvalues: jax.Array      # shape (n_eigenstates,), sorted ascending
     eigenstates: jax.Array      # shape (*grid.shape, n_eigenstates)
     n_iters: int                # number of Lanczos steps actually taken
-    converged: bool             # True if beta fell below tolerance
+    converged: bool             # True if any beta fell below tolerance
 
 
 def lanczos(
@@ -50,70 +57,82 @@ def lanczos(
 
     Parameters
     ----------
-    H : Hamiltonian (matrix-free; exposes H.apply)
+    H : Hamiltonian (matrix-free; exposes H.apply and H.grid).
     psi0 : (Nx, Ny, Nz) starting vector; should have nonzero overlap with
-        every target eigenstate (in practice, a generic random or physically
-        motivated initial guess works).
-    n_iters : maximum Krylov dimension. Typical: 50–200.
-    n_eigenstates : how many eigenpairs to return (lowest in the spectrum).
-    tol : early-exit tolerance on β (off-diagonal element); if β < tol the
-        Krylov space has saturated and further iterations add no information.
+        every target eigenstate.
+    n_iters : Krylov dimension. The full `n_iters` steps are always run
+        (no early-exit) so the inner loop can be staged once and executed
+        on the device with no Python-side dispatch.
+    n_eigenstates : how many Ritz pairs to return (lowest in the spectrum).
+    tol : reported in the result if any β_j fell below this value, indicating
+        Krylov saturation. Does not change the iteration count.
     """
     grid = H.grid
     shape = psi0.shape
 
-    # normalize the starting vector
-    v = psi0 / jnp.sqrt(norm_sq(psi0, grid).real)
+    v0 = psi0 / jnp.sqrt(norm_sq(psi0, grid).real)
+    real_dtype = jnp.real(v0).dtype
 
-    V: list[jax.Array] = [v]              # Krylov basis vectors on the grid
-    alpha_list: list[float] = []          # diagonal of the tridiagonal
-    beta_list: list[float] = []           # off-diagonal
+    V_buf = jnp.zeros((n_iters + 1,) + shape, dtype=v0.dtype).at[0].set(v0)
+    alphas = jnp.zeros(n_iters, dtype=real_dtype)
+    betas = jnp.zeros(n_iters, dtype=real_dtype)
 
-    converged = False
-    for j in range(n_iters):
-        w = H.apply(V[-1])
-        if beta_list:
-            w = w - beta_list[-1] * V[-2]
+    def body(j, carry):
+        Vb, a_buf, b_buf = carry
+        v_j = Vb[j]
+        w = H.apply(v_j)
+        # Subtract β_{j-1} v_{j-1}; at j=0 this is masked to zero.
+        prev_idx = jnp.maximum(j - 1, 0)
+        beta_prev = jnp.where(j > 0, b_buf[prev_idx], jnp.zeros((), dtype=real_dtype))
+        w = w - beta_prev * Vb[prev_idx]
+        # α_j = ⟨v_j, w⟩
+        alpha = inner_product(v_j, w, grid).real
+        a_buf = a_buf.at[j].set(alpha)
+        w = w - alpha * v_j
 
-        alpha = float(inner_product(V[-1], w, grid).real)
-        alpha_list.append(alpha)
-        w = w - alpha * V[-1]
+        # Full reorthogonalization against Vb[0..j].
+        def _reortho(k, w_inner):
+            vk = Vb[k]
+            coeff = inner_product(vk, w_inner, grid).real
+            return w_inner - coeff * vk
+        w = jax.lax.fori_loop(0, j + 1, _reortho, w)
 
-        # full reorthogonalization — protects against spurious eigenvalues
-        for vk in V:
-            w = w - inner_product(vk, w, grid) * vk
+        # β_j = ‖w‖; guard divison by zero to keep Vb finite even after
+        # Krylov saturation. The corresponding v_{j+1} is left as zeros.
+        beta = jnp.sqrt(norm_sq(w, grid).real)
+        b_buf = b_buf.at[j].set(beta)
+        safe_beta = jnp.where(beta > 0, beta, jnp.ones((), dtype=real_dtype))
+        v_next = jnp.where(beta > 0, w / safe_beta, jnp.zeros_like(w))
+        Vb = Vb.at[j + 1].set(v_next)
+        return Vb, a_buf, b_buf
 
-        beta = float(jnp.sqrt(norm_sq(w, grid).real))
-        if beta < tol:
-            converged = True
-            break
-        beta_list.append(beta)
-        V.append(w / beta)
+    V_buf, alphas, betas = jax.lax.fori_loop(
+        0, n_iters, body, (V_buf, alphas, betas)
+    )
 
-    m = len(alpha_list)
-    # Build the m×m symmetric tridiagonal T. There are m alpha's and at most
-    # m-1 useful beta's: a beta computed at the END of iteration j connects
-    # iterations j and j+1, so it is only meaningful if we did iteration j+1.
-    T = jnp.diag(jnp.asarray(alpha_list))
-    if m >= 2:
-        off = jnp.asarray(beta_list[: m - 1])
+    # Build the m×m symmetric tridiagonal T (m = n_iters). The j-th β couples
+    # iterations j and j+1, so only the first n_iters-1 betas appear off-diagonal.
+    T = jnp.diag(alphas)
+    if n_iters >= 2:
+        off = betas[: n_iters - 1]
         T = T + jnp.diag(off, k=1) + jnp.diag(off, k=-1)
     evals, evecs_T = jnp.linalg.eigh(T)
 
-    # Reconstruct full-grid eigenvectors from the Krylov basis. The loop
-    # leaves V with m+1 entries when all m iterations complete (the extra v
-    # is the next candidate seed); use only the first m for Ritz extraction.
-    V_stack = jnp.stack([v.reshape(-1) for v in V[:m]], axis=0)  # (m, N³)
-    psi_states = (evecs_T.T @ V_stack).reshape(m, *shape)       # (m, Nx, Ny, Nz)
+    # Reconstruct full-grid Ritz vectors from the Krylov basis. Use the
+    # populated prefix V_buf[:n_iters]; V_buf[n_iters] is the next candidate
+    # seed and not part of the Ritz expansion.
+    V_stack = V_buf[:n_iters].reshape(n_iters, -1)
+    psi_states = (evecs_T.T @ V_stack).reshape(n_iters, *shape)
 
-    # pick the lowest K eigenpairs
-    K = min(n_eigenstates, m)
+    K = min(n_eigenstates, n_iters)
     eigenvalues = evals[:K]
-    eigenstates = jnp.transpose(psi_states[:K], axes=(1, 2, 3, 0))  # (..., K)
+    eigenstates = jnp.transpose(psi_states[:K], axes=(1, 2, 3, 0))
+
+    converged = bool(jnp.any(betas[: max(n_iters - 1, 1)] < tol))
 
     return LanczosResult(
         eigenvalues=eigenvalues,
         eigenstates=eigenstates,
-        n_iters=m,
+        n_iters=int(n_iters),
         converged=converged,
     )
