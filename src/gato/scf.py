@@ -85,6 +85,32 @@ def exchange_apply(
     return jnp.sum(contribs, axis=-1)
 
 
+@partial(jax.jit, static_argnames=("grid", "boundary", "order", "V_nl_apply"))
+def _fock_apply_kernel(
+    psi: jax.Array,
+    V_ext: jax.Array,
+    V_H: jax.Array,
+    orbitals: jax.Array,
+    grid: Grid3D,
+    boundary: str,
+    order: int,
+    epsilon: jax.Array,
+    V_nl_apply: Callable[[jax.Array], jax.Array] | None,
+) -> jax.Array:
+    """Single JIT'd Fock matvec: F ψ = (T + V_ext + V_nl) ψ + V_H ψ − K̂ ψ.
+
+    Called once per Lanczos iteration. Compiled XLA graph fuses kinetic,
+    multiplications and exchange into one device dispatch instead of the
+    five separate Python-level ops the previous matrix-free pipeline did.
+    """
+    h_psi = kinetic(psi, grid.h, boundary, order) + V_ext * psi
+    if V_nl_apply is not None:
+        h_psi = h_psi + V_nl_apply(psi)
+    J_psi = V_H * psi
+    K_psi = exchange_apply(psi, orbitals, grid, epsilon=epsilon)
+    return h_psi + J_psi - K_psi
+
+
 @dataclass(frozen=True)
 class RHFFock:
     """Closed-shell Fock operator as a matrix-free linear map.
@@ -118,12 +144,18 @@ class RHFFock:
         return hartree_potential(self.density(), self.grid, epsilon=self.epsilon)
 
     def apply(self, psi: jax.Array) -> jax.Array:
-        h_psi = kinetic(psi, self.grid.h, self.boundary, self.order) + self.V_ext * psi
-        if self.V_nl_apply is not None:
-            h_psi = h_psi + self.V_nl_apply(psi)
-        J_psi = self.hartree() * psi
-        K_psi = exchange_apply(psi, self.orbitals, self.grid, epsilon=self.epsilon)
-        return h_psi + J_psi - K_psi
+        eps = self.grid.h / 2 if self.epsilon is None else self.epsilon
+        return _fock_apply_kernel(
+            psi,
+            self.V_ext,
+            self.hartree(),
+            self.orbitals,
+            self.grid,
+            self.boundary,
+            self.order,
+            eps,
+            self.V_nl_apply,
+        )
 
 
 # ---------------------------------------------------------------------------
