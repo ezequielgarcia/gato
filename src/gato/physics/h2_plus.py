@@ -87,6 +87,15 @@ def bo_energy(
     return E_el + E_nn
 
 
+# Cache the JIT'd grad once at module load so repeated geometry steps reuse the
+# compiled XLA graph instead of re-tracing on every call. argnums (3, 5) =
+# (grid, order) are static; positions/charges/psi/epsilon flow as traced inputs.
+_bo_grad_positions = jax.jit(
+    jax.grad(bo_energy, argnums=0),
+    static_argnums=(3, 5),
+)
+
+
 def hellmann_feynman_force(
     positions: jax.Array,
     charges: jax.Array,
@@ -96,9 +105,7 @@ def hellmann_feynman_force(
     order: int = 4,
 ) -> jax.Array:
     """Force on every nucleus, shape (K, 3). Valid at converged ψ."""
-    return -jax.grad(bo_energy, argnums=0)(
-        positions, charges, psi, grid, epsilon, order
-    )
+    return -_bo_grad_positions(positions, charges, psi, grid, epsilon, order)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +204,7 @@ def optimize_geometry(
         )
 
     def bo_grad(point: SolvePoint) -> jax.Array:
-        return jax.grad(bo_energy, argnums=0)(
+        return _bo_grad_positions(
             point.nuclei.positions, point.nuclei.charges, point.psi,
             grid, epsilon, order,
         )

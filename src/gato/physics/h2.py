@@ -129,6 +129,13 @@ def bo_energy(
     return terms.total + nuclear_repulsion(nuclei)
 
 
+# Module-level cached force function — see h2_plus.py for rationale.
+_bo_grad_positions = jax.jit(
+    jax.grad(bo_energy, argnums=0),
+    static_argnums=(3, 5),
+)
+
+
 # ---------------------------------------------------------------------------
 # Geometry optimization
 # ---------------------------------------------------------------------------
@@ -166,7 +173,7 @@ def optimize_geometry(
         )
 
     def bo_grad(p: H2Point) -> jax.Array:
-        return jax.grad(bo_energy, argnums=0)(
+        return _bo_grad_positions(
             p.nuclei.positions, p.nuclei.charges, p.orbitals,
             grid, epsilon, order,
         )
