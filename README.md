@@ -295,9 +295,8 @@ Prints JAX version, the available device, a grid summary, and the kinetic energy
 ```bash
 cd gato
 uv sync              # creates .venv/ and installs all CPU deps from uv.lock
-uv run pytest        # 40 tests should pass
-uv run gato          # smoke test
-uv run gato-hydrogen # full hydrogen benchmark
+uv run pytest        # 87 tests should pass (2 are GPU-gated and skip on CPU)
+uv run gato          # smoke test: prints JAX device + kinetic energy of a unit Gaussian
 ```
 
 On a GPU box, add the CUDA extras:
@@ -312,7 +311,22 @@ No system CUDA install is needed — `jax[cuda12]` bundles its own CUDA 12 + cuD
 
 The `GATO_GPU=1` environment variable unskips two test stubs in `tests/test_scf.py` (beryllium and neon RHF) that are an order of magnitude too slow on CPU but routine on a recent GPU. Everything else runs on CPU or GPU with no code changes.
 
-### 4.3 Double precision
+### 4.3 Run a simulation
+
+Each phase ships a self-contained CLI. Defaults reproduce the reference numbers in §9; pass `--help` to any of them to see the full flag surface (grid size, box length, geometry, optimizer steps, stencil order, etc.).
+
+| Command | What it does | Expected end-state |
+|---|---|---|
+| `uv run gato-hydrogen` | Phase 1: imag-time + Lanczos on H, He⁺, Li²⁺ | E₀ ≈ −Z²/2 within softening |
+| `uv run gato-helium` | Phase 3: closed-shell RHF on He | E ≈ −2.86 E_h after ε→0 fit |
+| `uv run gato-h2plus` | Phase 2: H₂⁺ geometry-opt by Hellmann–Feynman | R_e ≈ 1.997 a₀ (Burrau) |
+| `uv run gato-h2` | Phase 4: H₂ RHF geometry-opt (all-electron) | R_e ≈ 1.40 a₀ |
+| `uv run gato-lih` | Phase 4: LiH RHF + HGH pseudopotentials | R_e ≈ 3.02 a₀ |
+| `uv run gato-water` | Phase 4 headline: H₂O RHF + HGH PP geometry-opt | R_OH ≈ 1.78 a₀, ∠HOH ≈ 106° |
+
+Add `--single` to the molecular drivers (`gato-h2`, `gato-lih`, `gato-water`) to run a single-point RHF without geometry optimization — useful for sanity-checking the SCF before committing to a full relaxation. Typical CPU runtimes range from ~20 s (hydrogen) to a few minutes (water geometry-opt at the default grid); GPU cuts that by an order of magnitude on the SCF-heavy phases.
+
+### 4.4 Double precision
 
 JAX defaults to float32 for performance. Quantum energies are small differences of large kinetic and potential contributions, so float32 will quietly corrupt your answers. Always enable x64:
 
