@@ -53,9 +53,8 @@ construction, so Hellmann-Feynman forces flow naturally.
 
 Parameter coverage
 ------------------
-This module ships parameters for H and O — the two elements needed for
-H₂O. Adding a new element is ~20 lines of tabulated values from the
-HGH paper. The parameter tables here use the LDA-fitted HGH values
+This module ships parameters for H, Li, O, and Cl. Adding a new element
+is ~20 lines of tabulated values from the HGH paper. The parameter tables here use the LDA-fitted HGH values
 (table I of Hartwigsen 1998); these are also commonly used with HF
 without significant loss of accuracy because the pseudopotential's job
 is to reproduce the valence-region radial logarithmic derivative, which
@@ -158,10 +157,31 @@ LITHIUM_HGH = HGHParams(
 # (`Li GTH-PADE-q1`), traceable to Hartwigsen-Goedecker-Hutter 1998 table I.
 
 
+CHLORINE_HGH = HGHParams(
+    symbol="Cl",
+    Z_ion=7.0,
+    r_loc=0.41,
+    c=(-6.86475431, 0.0, 0.0, 0.0),
+    projectors=(
+        # s-channel has TWO radial projectors with non-trivial h_12 coupling
+        # — the first multi-i HGH block exercised in the codebase.
+        HGHProjector(ell=0, r=0.33820832, h=(
+            ( 9.06223968, -1.96193036),
+            (-1.96193036,  5.06568240),
+        )),
+        HGHProjector(ell=1, r=0.37613709, h=((4.46587640,),)),
+    ),
+)
+# HGH-LDA-q7 Cl (3s² 3p⁵ valence, [Ne] core frozen). Source: CP2K
+# GTH_POTENTIALS file (`Cl GTH-PADE-q7`), traceable to Hartwigsen-Goedecker-
+# Hutter 1998 table I.
+
+
 HGH_TABLE: dict[str, HGHParams] = {
     "H": HYDROGEN_HGH,
     "Li": LITHIUM_HGH,
     "O": OXYGEN_HGH,
+    "Cl": CHLORINE_HGH,
 }
 
 
