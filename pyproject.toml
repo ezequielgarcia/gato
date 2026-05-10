@@ -21,6 +21,7 @@ gato-helium = "gato.physics.helium:main"
 gato-h2plus = "gato.physics.h2_plus:main"
 gato-h2 = "gato.physics.h2:main"
 gato-lih = "gato.physics.lih:main"
+gato-hcl = "gato.physics.hcl:main"
 gato-water = "gato.physics.water:main"
 
 [tool.pytest.ini_options]
