@@ -401,7 +401,15 @@ def scf_rhf(
             epsilon=epsilon,
             V_nl_apply=V_nl_apply,
         )
-        res = lanczos(fock, orbitals[..., 0], n_iters=lanczos_iters, n_eigenstates=n_occ)
+        # Seed Lanczos from a vector overlapping *all* occupied orbitals
+        # (their sum), not just the first. A starter of orbitals[..., 0] alone
+        # is nearly orthogonal to the other n_occ-1 states, so those must be
+        # rebuilt from scratch through Krylov mixing every iteration — slow and
+        # noisy for near-degenerate manifolds (e.g. the Cl 3p states in HCl),
+        # which is what stalls the SCF. The sum reduces to orbitals[..., 0] for
+        # single-orbital systems, leaving atoms like H and He unaffected.
+        seed = jnp.sum(orbitals, axis=-1)
+        res = lanczos(fock, seed, n_iters=lanczos_iters, n_eigenstates=n_occ)
         new_orbitals = res.eigenstates
         orbital_energies = res.eigenvalues
 
