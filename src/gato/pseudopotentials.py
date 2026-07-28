@@ -1,4 +1,4 @@
-"""HGH (Hartwigsen–Goedecker–Hutter) norm-conserving pseudopotentials.
+r"""HGH (Hartwigsen–Goedecker–Hutter) norm-conserving pseudopotentials.
 
 A **norm-conserving pseudopotential** replaces the bare nuclear Coulomb
 $-Z/r$ with a smooth, short-range potential that reproduces the correct
