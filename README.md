@@ -351,7 +351,9 @@ Every physical system the project solves, organized by method.
 | 1 ✓ | He⁺, Li²⁺ (hydrogenic ions) | 1 | 1 | same, $Z$-scaled | CPU |
 | 2 ✓ | $\text{H}_2^+$ | 1 | 2 | grid + autodiff forces on $\mathbf R$ | CPU |
 | 3 ✓ | He (helium atom) | 2 | 1 | RHF, SCF | CPU / 5070 |
-| 4 | H₂O | 8 valence | 3 | RHF + HGH PP + autodiff geometry | 5070 |
+| 4 | H₂O | 8 valence | 3 | RHF + HGH PP + autodiff geometry | 5070 ✓ |
+| 4 | LiH | 4 valence | 2 | same | 5070 |
+| 4 | HCl | 8 valence | 2 | same — **refinement-limited**, see §9 | 5070 |
 
 **Ab-initio.** Every phase is strictly ab initio: Schrödinger, Pauli antisymmetry (Slater determinant in Phases 3–4), and variational minimization. No empirical parameters, no fitted functionals.
 
@@ -418,15 +420,19 @@ Test stubs exist in `tests/test_scf.py::test_beryllium_rhf_converges` and `::tes
 
 Combine Phase 2 (multiple nuclei + autodiff forces) with Phase 3 (SCF) into *strictly ab-initio* mean-field molecules. One Slater determinant, exact Coulomb and exchange, no empirical parameters.
 
-- [ ] SCF with multi-center potentials, Hartree term $J[\rho]$ via 3D FFT convolution
-- [ ] **Exact exchange operator** $\hat K$ implemented as $n_\text{orb}^2$ real-space Poisson solves per SCF iteration
-- [ ] Hellmann–Feynman + Pulay forces via `jax.grad` on the self-consistent energy
-- [ ] Joint $(\theta_{\text{orbitals}}, \mathbf R_{\text{nuclei}})$ optimization
-- [ ] H₂ (2 e⁻, 1 orbital): bond length $\approx 1.40\,a_0$ at RHF, compared to experiment $1.401\,a_0$
-- [ ] LiH (4 e⁻, 2 orbitals): bond length $\approx 3.02\,a_0$ at RHF
-- [ ] H₂O (10 e⁻, 5 orbitals): bond angle $\approx 106°$ at RHF, bond length $\approx 1.78\,a_0$
+- [x] SCF with multi-center potentials, Hartree term $J[\rho]$ via 3D FFT convolution
+- [x] **Exact exchange operator** $\hat K$ implemented as $n_\text{orb}^2$ real-space Poisson solves per SCF iteration
+- [x] Hellmann–Feynman forces via `jax.grad` on the self-consistent energy (validated against finite differences; no Pulay term is needed, since the orbitals are stationary at the SCF solution)
+- [x] Alternating $(\text{orbitals}, \mathbf R_{\text{nuclei}})$ optimization — SCF to convergence, then one Adam step on positions
+- [x] H₂ (2 e⁻, 1 orbital) and LiH (4 valence e⁻) drivers
+- [x] H₂O (**8 valence** e⁻, 4 orbitals with HGH PP — not 10/5, the O 1s pair is frozen into the pseudopotential) — energetics converged, see §9
+- [x] Grid-convergence study separating resolution from box error (`benchmarks/grid_convergence.py`)
+- [ ] **H₂O relaxed geometry certified against $h \to 0$** — currently limited by geometry-optimizer convergence, not by the grid; see §9
+- [ ] Block eigensolver (block Lanczos / LOBPCG) to lift the degeneracy restriction that blocks HCl refinement, NH₃ and CH₄
 
 **Exit criterion (project's ab-initio terminal target):** H₂O geometry recovered at the RHF level consistent with published RHF reference values (angle $\approx 106°$, $d_{\text{OH}} \approx 1.78\,a_0$). Energy within a few mHa of reference RHF. The systematic $\sim\!1.5°$ overestimate of the bond angle vs. experiment is a known RHF limitation — recovering it requires the correlation energy that mean-field cannot see by construction.
+
+**Status against that criterion.** The energy half is done: $E(h \to 0) \approx -16.99\,E_h$ at $L = 14\,a_0$, with box error under 0.1 mHa and a measured convergence order of $p \approx 2.3$. The geometry half is **not** met — the relaxed $R_\text{OH}$ still scatters by $\pm 0.03\,a_0$ between grids, which is larger than the difference being tested for. Note also that "within a few mHa of reference RHF" needs a like-for-like reference: these are *valence-only* pseudopotential energies, so they are not directly comparable to all-electron RHF totals.
 
 ---
 
@@ -490,15 +496,27 @@ Phases 1, 2, and 3 are **complete end-to-end**.
 | Li²⁺ $E_0$ (imag-time, $48^3$, $L=4$, $O(h^4)$) | | $-4.275\,E_h$ | $-4.500$ |
 | 3D HO Lanczos ladder ($N=40$, $L=10$) | | $1.50, 2.50, 3.50, \ldots$ | $1.5, 2.5, 3.5, \ldots$ |
 
-The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. All 46 tests pass.
+The $\epsilon \to 0$ linear extrapolation closes the hydrogen residual from $2.6\%$ (fixed softening) to $< 1\%$ ($E_0 = -0.504\,E_h$). An independent 1D log-radial solver with the bare $V = -Z/r$ potential reproduces $-0.500\,E_h$ to seven decimal places at $N = 800$, which confirms that the remaining 3D residual is softening-limited, not a bug in the Cartesian stack. The $Z^2$ scaling of the hydrogenic ground state is reproduced across $Z \in \{1, 2, 3\}$ on both grids at comparable relative accuracy. The Lanczos solver recovers the full 3D harmonic-oscillator ladder on a $40^3$ grid, providing the eigensolver infrastructure that Phase 3 will use inside the SCF loop. The suite now stands at 99 passing tests (2 skipped, both noted under Phase 3).
 
 **Phase 2 is also complete.** Starting from $R = 2.4\,a_0$ on a $56^3$ grid, 30 Adam steps on the Born–Oppenheimer energy recover the $\text{H}_2^+$ bond length $R_e = 1.9986\,a_0$ — within $0.07\%$ of the Burrau 1927 analytic value $1.9972\,a_0$ — by pure gradient descent. The total energy $-0.5749\,E_h$ is softening-limited (~28 mHa above the analytic $-0.6026\,E_h$), the same $O(\varepsilon)$ bias observed in Phase 1 and closable by the same $\varepsilon \to 0$ extrapolation.
 
-**Phase 3 is complete on helium.** The self-consistent RHF driver on He converges in $\sim 6$ iterations at $\varepsilon = h/2$; sweeping $\varepsilon$ across five values at fixed grid and linearly extrapolating $E(\varepsilon) \to E(0)$ closes the residual to $-3.4\,$mHa at $N = 80$, $L = 10\,a_0$ — at chemical accuracy, with the remaining few-mHa residual attributable to 4th-order-stencil grid discretization rather than softening. The Hockney doubled-grid FFT Hartree solver, the general $n_\text{orb}^2$ exchange operator written in its full form (validated analytically at $n_\text{occ} = 1$, where it reduces to self-exchange), and the symmetry-breaking core-Hamiltonian initial guess are all implemented. The Be ($n_\text{occ} = 2$) and Ne ($n_\text{occ} = 5$) tests stand as `@pytest.mark.skip`-decorated stubs; the multi-orbital code path has **not** been exercised on a real atom and will be validated when the 5070 is wired in.
+**Phase 3 is complete on helium.** The self-consistent RHF driver on He converges in $\sim 6$ iterations at $\varepsilon = h/2$; sweeping $\varepsilon$ across five values at fixed grid and linearly extrapolating $E(\varepsilon) \to E(0)$ closes the residual to $-3.4\,$mHa at $N = 80$, $L = 10\,a_0$ — at chemical accuracy, with the remaining few-mHa residual attributable to 4th-order-stencil grid discretization rather than softening. The Hockney doubled-grid FFT Hartree solver, the general $n_\text{orb}^2$ exchange operator written in its full form (validated analytically at $n_\text{occ} = 1$, where it reduces to self-exchange), and the symmetry-breaking core-Hamiltonian initial guess are all implemented. The Be ($n_\text{occ} = 2$) and Ne ($n_\text{occ} = 5$) tests stand as `@pytest.mark.skip`-decorated stubs — these are the 2 skipped tests in the suite. The 5070 is now available and no longer the blocker; they remain unwritten. Note that the multi-orbital code path *has* since been exercised on real molecules by the Phase 4 water and HCl drivers ($n_\text{occ} = 4$), so the gap here is atom-level regression coverage rather than an untested code path. Ne is worth care when it is written: as a closed-shell atom its 2p level is 3-fold degenerate, which is the eigensolver limitation described under Phase 4.
 
-All Phase 1, 2, and 3 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and runs unchanged on GPU via `uv sync --extra gpu`; on an RTX 5070 the same Phase 3 helium extrapolation is expected in single-digit minutes, and the Be/Ne benchmarks become tractable.
+All Phase 1, 2, and 3 numbers above were produced in float64 on a **single CPU core**. The codebase is pure JAX and ran unchanged on GPU via `uv sync --extra gpu` once the card was installed — no code changes were required. On the RTX 5070 (12 GB) a water RHF single point at $N = 128$ converges in ~160 s, which is what made the Phase 4 grid-convergence study below feasible. Two practical notes: pass `XLA_FLAGS=--xla_gpu_autotune_level=0` for fine grids, or the cuBLAS autotuner requests a multi-GB profiling scratch and OOMs before the solver does; and $N \approx 128$ is the practical ceiling for a 4-orbital system, since the Krylov buffer is $(m+1)N^3$ doubles with $m$ itself growing as $N$.
 
-**Phase 4 is wired but not yet quantitatively validated.** The HGH pseudopotential module (`pseudopotentials.py`) has analytic-form smoke tests covering the long-range Coulomb tail, the value at the origin, radial projector normalization, non-local Hermiticity, and differentiability in nuclear positions (11 tests, all passing). The water driver (`physics/water.py`) runs end-to-end on a 32³ grid: SCF converges in ~20 iterations to four doubly-occupied valence MOs, and `jax.grad` of the BO energy returns finite Hellmann–Feynman forces pointing in physically sensible directions. The remaining work is the geometry-relaxation regression — does Adam on positions actually recover the experimental angle and bond length on a finer grid — which is the next milestone.
+**Phase 4 energetics are validated on water; the geometry is not yet.** The HGH pseudopotential module (`pseudopotentials.py`) has analytic-form smoke tests covering the long-range Coulomb tail, the value at the origin, radial projector normalization, non-local Hermiticity, and differentiability in nuclear positions. The water and HCl drivers run end-to-end, and `jax.grad` of the BO energy returns Hellmann–Feynman forces that agree with finite differences. 99 tests pass (2 skipped).
+
+**The 5070 is now wired in**, which made a proper grid-convergence study possible for the first time (`benchmarks/grid_convergence.py`). Running it immediately exposed a solver bug and then produced the first trustworthy Phase 4 numbers.
+
+*The bug.* The SCF used a **fixed** Lanczos Krylov dimension. The Fock spectral width grows as $h^{-2}$ while the physical gap does not, so a dimension adequate at $N = 64$ silently fails at $N \geq 96$: water's highest occupied orbital came back at $-0.11\,E_h$ instead of $-0.52\,E_h$, and the total energy drifted *upward* under refinement ($-18.89, -17.21, -16.19, -14.04$ for $N = 32 \ldots 128$) — which reads as broken grid convergence rather than a broken eigensolver. The Krylov dimension now scales with the grid (`solvers.lanczos.default_krylov_dim`), and the same sequence converges monotonically in ~15 SCF iterations at every $N$.
+
+*Water, resolution.* At $L = 14\,a_0$, $E(h \to 0) \approx -16.99\,E_h$ with an **observed convergence order $p \approx 2.3$, not 4**. The 4th-order stencil is therefore *not* the accuracy bottleneck: the error is dominated by the $O(h^2)$ sampling of the narrow HGH projectors ($r_\ell \approx 0.22\,a_0$ for O). The default $N = 64$ sits ~225 mHa above the converged value, so the previously quoted $\approx -17.2\,E_h$ matched an under-resolved grid by coincidence.
+
+*Water, box.* At exactly $h = 0.2$, $E$ moves by $0.04\,$mHa between $L = 14$ and $L = 20$. Box error is a non-issue at the default; resolution is the whole story.
+
+*Water, geometry — open.* The relaxed $R_\text{OH}$ oscillates ($1.751 / 1.721 / 1.745\,a_0$ at $N = 64/80/96$) rather than converging, with scatter exceeding any grid trend. This is most likely the geometry optimizer rather than the grid — Adam at $\text{lr} = 0.05$ with no force-convergence criterion — but that is **not yet confirmed**, so the reference geometry in `physics/water.py` remains uncertified. This is the next milestone.
+
+*HCl is refinement-limited by the eigensolver, not by physics.* HCl is $C_{\infty v}$ with an **exactly 2-fold degenerate $3\pi$ level**, and a single-vector Lanczos can only split a true degeneracy through round-off. The driver is correct at its default $N = 64$, but refining makes it *worse*: at $N = 80$ it needs $\gtrsim 200$ Krylov vectors, gets 120, and returns a silently wrong answer (the $\pi$ pair absent, total energy off by $0.75\,E_h$, `converged` still `True`). This generalizes: molecules in point groups with only 1-D irreps (C₁, Cₛ, C₂, C₂ᵥ, C₂ₕ, D₂ₕ — **H₂O among them**) are safe, while $\pi$/$e$/$t$ degeneracies are not — which puts **NH₃ and CH₄ out of reach** until the eigensolver is upgraded to a block method (block Lanczos / LOBPCG) seeded with $n_\text{occ}$ vectors. A C₂ᵥ molecule such as H₂S is the natural next target at water's cost without that work.
 
 ---
 
