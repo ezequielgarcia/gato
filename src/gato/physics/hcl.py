@@ -28,6 +28,32 @@ Reference values (RHF complete-basis with HGH-LDA pseudopotentials)
 - Bond length R_e:  ~2.41 a₀  (~1.275 Å)        experiment: 1.2745 Å
 - Total energy:     ~-15.5 E_h with HGH         (PP-dependent absolute)
 - Dipole moment:    ~1.5 D                       experiment: 1.08 D
+
+Grid-refinement limit — READ BEFORE RAISING --N
+-----------------------------------------------
+**This driver is correct at its default N = 64 but cannot simply be refined.**
+HCl is C∞v, so its occupied manifold contains an *exactly* 2-fold degenerate
+3π level, and a single-vector Lanczos can only split a true degeneracy through
+round-off. The Krylov dimension needed therefore far exceeds what
+`default_krylov_dim` returns as the grid is refined:
+
+    N = 64   needs ~120   (the default: OK)
+    N = 80   needs ~200   (the default gives 120: WRONG ANSWER)
+
+At N = 80 with the default the 3π pair does not appear at all, the fourth
+orbital lands at -0.16 E_h instead of -0.48 E_h, and the total energy is off by
+0.75 E_h — while `converged` still reports True. Refining N therefore makes the
+answer *worse*, not better, until `lanczos_iters` is raised alongside it.
+
+If you refine this molecule, pass `--lanczos-iters` explicitly (≳ 200 at
+N = 80, more beyond) and check that the two highest occupied orbital energies
+come out degenerate to ~1e-3 E_h. `scf_rhf` also warns when the final Ritz
+residual shows the occupied states were not resolved.
+
+For a grid-convergence study of a *heavier* atom without this pathology, a
+C2v molecule such as H₂S is the right target: same n_occ = 4 and cost as water,
+third-row diffuse valence, but no symmetry-required degeneracy. See
+`benchmarks/grid_convergence.py` and `gato.solvers.lanczos.default_krylov_dim`.
 """
 from __future__ import annotations
 

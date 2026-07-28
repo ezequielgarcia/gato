@@ -71,12 +71,35 @@ def default_krylov_dim(N: int, n_eigenstates: int = 1) -> int:
     for only 50–60. Under-resolved, the pair splits spuriously (-0.498 /
     -0.497 Ha instead of degenerate) and the SCF stalls at max_iters.
 
-    The two effects are combined with `max`, not a sum: the spectral term is
-    calibrated on H₂O, which has the same occupied count and a comparable
-    spectral width, so the larger of the two has been sufficient on every case
-    tested here. Sweeps in `benchmarks/grid_convergence.py` report SCF
-    convergence per point and drop non-converged points from their fits, which
-    is the check that would catch a system needing more than this.
+    **This rule is calibrated for non-degenerate occupied manifolds and is NOT
+    sufficient when a molecule has a symmetry-required degeneracy.** The two
+    effects above are combined with `max`, which assumes the larger dominates;
+    for HCl that assumption fails at finer grids. Measured on HCl at L = 14 a₀:
+    N = 64 is resolved by the 120 this returns, but N = 80 needs ≳ 200 and gets
+    120, which silently yields a wrong answer (the 3π pair does not appear at
+    all and the fourth orbital lands at -0.16 Ha instead of -0.48 Ha, with the
+    total energy off by 0.75 Ha while `converged` still reports True).
+
+    The root cause is structural, not a bad constant: a single Lanczos starting
+    vector spans one direction per invariant Krylov subspace, so an exactly
+    degenerate level can only be split by round-off. No choice of scalar
+    formula fixes that in general — the real fix is a block method (block
+    Lanczos / LOBPCG) seeded with n_eigenstates vectors. Until then, molecules
+    in point groups with only 1-D irreps (C1, Cs, C2, C2v, C2h, D2h — H₂O among
+    them) are safe; ones with π, e or t degeneracies (HCl, HF, N₂, CO, NH₃,
+    CH₄) need `lanczos_iters` set explicitly and verified by hand.
+
+    Note that the **Ritz residual does not detect this failure**, so don't
+    reach for it as a safety net — it was tried and rejected. The residual
+    |β_m · s_k[m−1]| measures whether the returned pairs are *converged*
+    eigenpairs, not whether they are the *wanted* ones. When the Krylov space
+    never contains the second component of a degenerate pair, Lanczos converges
+    tightly onto a different, complete-looking set of states. Measured on HCl at
+    N = 80: the wrong answer (m = 120) has residual 2.2e-5 while the right one
+    (m = 200) has 3.1e-5 — the bad run scores *better*. Correct water runs at
+    N = 64 and N = 96 spread over 1.7e-6..5.9e-4, so no threshold separates
+    them. A residual cannot see a *skipped* eigenvalue; only a block method or
+    an explicit convergence study in m can.
 
     Cost scales as O(m²N³) in time and O(mN³) in memory, so this is not a
     quantity to over-provision on a large grid.

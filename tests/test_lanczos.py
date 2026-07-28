@@ -140,6 +140,12 @@ def test_default_krylov_dim_scales_with_grid():
     # HCl at L=14 needs >=120 steps at N=40 and N=48, where the 1/h term
     # alone would ask for only 50-60; below that its Cl 3π pair splits
     # spuriously and the SCF stalls.
+    #
+    # NOTE: this floor is *not* enough for HCl on finer grids — N=80 needs
+    # ~200 and this rule returns 120. That is a structural limit of
+    # single-vector Lanczos on degenerate levels, not a constant to retune;
+    # see `default_krylov_dim` for why, and pass lanczos_iters explicitly for
+    # molecules with π/e/t degeneracies.
     assert default_krylov_dim(40, 4) >= 120
     assert default_krylov_dim(48, 4) >= 120
     assert default_krylov_dim(8, 12) > 12
