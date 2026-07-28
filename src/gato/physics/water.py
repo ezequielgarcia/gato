@@ -135,7 +135,7 @@ def solve_rhf_at_geometry(
     tol: float = 1e-6,
     mixing: float = 0.5,
     order: int = 4,
-    lanczos_iters: int = 80,
+    lanczos_iters: int | None = None,
     initial_orbitals: jax.Array | None = None,
 ) -> WaterPoint:
     """RHF on a fixed nuclear configuration with HGH pseudopotentials."""
@@ -262,6 +262,7 @@ def optimize_water_geometry(
     scf_tol: float = 1e-6,
     scf_mixing: float = 0.5,
     order: int = 4,
+    lanczos_iters: int | None = None,
     verbose: bool = True,
 ) -> WaterGeomOptResult:
     """Alternating SCF + nuclear gradient descent.
@@ -284,6 +285,7 @@ def optimize_water_geometry(
             nuclei, elements, grid,
             initial_orbitals=init_orb,
             max_iters=scf_max_iters, tol=scf_tol, mixing=scf_mixing, order=order,
+            lanczos_iters=lanczos_iters,
         )
 
     def bo_grad(p: WaterPoint) -> jax.Array:
@@ -337,6 +339,8 @@ def main() -> None:
     parser.add_argument("--scf-iters", type=int, default=60)
     parser.add_argument("--mixing", type=float, default=0.5)
     parser.add_argument("--order", type=int, choices=[2, 4], default=4)
+    parser.add_argument("--lanczos-iters", type=int, default=None,
+                        help="Krylov dimension (default: scales with --N)")
     parser.add_argument("--single", action="store_true",
                         help="single-point only, skip geometry optimization")
     args = parser.parse_args()
@@ -356,6 +360,7 @@ def main() -> None:
         point = solve_rhf_at_geometry(
             nuclei, elements, grid,
             max_iters=args.scf_iters, mixing=args.mixing, order=args.order,
+            lanczos_iters=args.lanczos_iters,
         )
         print(f"Energy        : {point.energy:+.6f} Ha   (RHF + E_nn)")
         print(f"E_RHF         : {point.rhf_energy:+.6f} Ha")
@@ -372,6 +377,7 @@ def main() -> None:
         scf_max_iters=args.scf_iters,
         scf_mixing=args.mixing,
         order=args.order,
+        lanczos_iters=args.lanczos_iters,
         verbose=True,
     )
     R_final = float(bond_length(result.final.nuclei, 0, 1))

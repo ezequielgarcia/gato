@@ -66,7 +66,7 @@ def solve_helium(
     tol: float = 1e-6,
     mixing: float = 0.7,
     order: int = 4,
-    lanczos_iters: int = 40,
+    lanczos_iters: int | None = None,
     verbose: bool = True,
 ) -> HeliumResult:
     """Solve closed-shell helium (or He-like Z=3, 4, …) by RHF.
@@ -80,7 +80,8 @@ def solve_helium(
         kernel. Defaults to h/2.
     max_iters, tol, mixing : SCF controls.
     order : finite-difference order of the kinetic stencil (2 or 4).
-    lanczos_iters : Krylov dimension for each Fock diagonalization.
+    lanczos_iters : Krylov dimension for each Fock diagonalization. Defaults
+        to a grid-dependent value; see `solvers.lanczos.default_krylov_dim`.
     """
     grid = Grid3D(N=N, L=L)
     V_ext = softened_coulomb(grid, Z=Z, epsilon=epsilon)
@@ -153,7 +154,8 @@ def main() -> None:
     parser.add_argument("--tol", type=float, default=1e-6)
     parser.add_argument("--mixing", type=float, default=0.7)
     parser.add_argument("--order", type=int, choices=[2, 4], default=4)
-    parser.add_argument("--lanczos-iters", type=int, default=40)
+    parser.add_argument("--lanczos-iters", type=int, default=None,
+                        help="Krylov dimension (default: scales with --N)")
     args = parser.parse_args()
 
     enable_x64()

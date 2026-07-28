@@ -46,6 +46,44 @@ class LanczosResult:
     converged: bool             # True if any beta fell below tolerance
 
 
+def default_krylov_dim(N: int, n_eigenstates: int = 1) -> int:
+    """Krylov dimension that resolves the lowest states on an N³ grid.
+
+    The number of Lanczos steps needed to converge the bottom of the spectrum
+    scales as $\\sqrt{W/g}$, where $W$ is the operator's spectral width and $g$
+    the gap above the states of interest. For a finite-difference kinetic
+    operator $W \\sim h^{-2}$ while $g$ is set by the physics and is
+    $h$-independent, so the requirement grows like $1/h \\propto N$ — a *fixed*
+    Krylov dimension silently degrades as the grid is refined.
+
+    The 1.25·N coefficient is calibrated empirically on H₂O + HGH (8 valence
+    electrons, L = 14 a₀), where the pass/fail threshold is sharp: N = 64
+    needs ≳ 80 steps (60 diverges), N = 96 needs ≳ 120 (100 diverges). Below
+    that threshold the highest occupied state comes out qualitatively wrong
+    (e.g. -0.11 Ha instead of -0.52 Ha at N = 96) and the SCF never converges,
+    so the failure is loud rather than a small loss of precision.
+
+    The $24 n + 24$ floor covers the part of the requirement that does *not*
+    come from the spectral width. Pulling apart a *degenerate* pair from a
+    single Lanczos starting vector is slow no matter how coarse the grid, and
+    it is the binding constraint for HCl: at L = 14 a₀ its Cl 3π pair needs
+    ≳ 120 steps at both N = 40 and N = 48, where the 1/h term alone would ask
+    for only 50–60. Under-resolved, the pair splits spuriously (-0.498 /
+    -0.497 Ha instead of degenerate) and the SCF stalls at max_iters.
+
+    The two effects are combined with `max`, not a sum: the spectral term is
+    calibrated on H₂O, which has the same occupied count and a comparable
+    spectral width, so the larger of the two has been sufficient on every case
+    tested here. Sweeps in `benchmarks/grid_convergence.py` report SCF
+    convergence per point and drop non-converged points from their fits, which
+    is the check that would catch a system needing more than this.
+
+    Cost scales as O(m²N³) in time and O(mN³) in memory, so this is not a
+    quantity to over-provision on a large grid.
+    """
+    return max(24 * n_eigenstates + 24, (5 * N) // 4)
+
+
 def lanczos(
     H: Hamiltonian,
     psi0: jax.Array,

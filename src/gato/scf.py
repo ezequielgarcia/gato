@@ -54,7 +54,7 @@ import jax.numpy as jnp
 from .grid import Grid3D, inner_product
 from .hamiltonian import Hamiltonian
 from .operators import kinetic
-from .solvers.lanczos import lanczos
+from .solvers.lanczos import default_krylov_dim, lanczos
 from .solvers.poisson import hartree_energy, hartree_potential
 
 
@@ -343,7 +343,7 @@ def scf_rhf(
     mixing: float = 1.0,
     boundary: str = "dirichlet",
     order: int = 4,
-    lanczos_iters: int = 60,
+    lanczos_iters: int | None = None,
     epsilon: float | None = None,
     V_nl_apply: Callable[[jax.Array], jax.Array] | None = None,
 ) -> SCFResult:
@@ -366,9 +366,15 @@ def scf_rhf(
         ρ_k = α ρ_new + (1−α) ρ_old. α=1 (default) is no mixing. Reducing α
         damps oscillations for hard-to-converge systems.
     boundary, order : passed through to the kinetic stencil.
-    lanczos_iters : Krylov dimension for each Fock diagonalization.
+    lanczos_iters : Krylov dimension for each Fock diagonalization. Defaults
+        to `default_krylov_dim(grid.N, n_occ)`, which grows with the grid;
+        a fixed value that is adequate on a coarse grid will silently fail to
+        resolve the occupied manifold on a fine one.
     V_nl_apply : optional non-local pseudopotential action ψ → V_nl ψ.
     """
+    if lanczos_iters is None:
+        lanczos_iters = default_krylov_dim(grid.N, n_occ)
+
     if initial_orbitals is None:
         orbitals = _default_initial_orbitals(
             V_ext, grid, n_occ, boundary, order, lanczos_iters

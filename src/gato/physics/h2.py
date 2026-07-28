@@ -73,7 +73,7 @@ def solve_rhf_at_geometry(
     tol: float = 1e-6,
     mixing: float = 0.7,
     order: int = 4,
-    lanczos_iters: int = 40,
+    lanczos_iters: int | None = None,
     initial_orbitals: jax.Array | None = None,
 ) -> H2Point:
     """RHF on a fixed nuclear configuration with bare (softened) Coulomb."""

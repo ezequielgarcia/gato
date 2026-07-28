@@ -110,3 +110,36 @@ def test_lanczos_vs_imag_time_hydrogen_ground_state():
 
     # both should be within softening-limited accuracy of each other
     assert abs(E_lz - E_it) < 1e-3, f"Lanczos {E_lz} vs imag-time {E_it}"
+
+
+def test_default_krylov_dim_scales_with_grid():
+    """The default Krylov dimension must grow with N, not sit at a constant.
+
+    A fixed dimension that is adequate on a coarse grid silently fails on a
+    fine one: the Fock spectral width grows like h⁻² while the physical gap
+    is h-independent, so the number of Lanczos steps needed to resolve the
+    occupied manifold grows like 1/h ∝ N. Regression guard for the fine-grid
+    failure documented in `default_krylov_dim` (at N=96 with the old fixed
+    default of 80, water's highest occupied orbital came out at -0.11 Ha
+    instead of -0.52 Ha and the SCF never converged).
+    """
+    from gato.solvers.lanczos import default_krylov_dim
+
+    # Strictly increasing across the range the PP drivers actually use.
+    dims = [default_krylov_dim(N, 4) for N in (32, 48, 64, 96, 128)]
+    assert dims == sorted(dims)
+    assert dims[-1] > dims[0]
+
+    # Calibrated pass/fail points for H2O + HGH (see default_krylov_dim).
+    assert default_krylov_dim(64, 4) >= 80
+    assert default_krylov_dim(96, 4) >= 120
+    assert default_krylov_dim(128, 4) >= 160
+
+    # A floor keeps coarse grids from under-provisioning: separating a
+    # near-degenerate manifold costs a fixed number of steps regardless of h.
+    # HCl at L=14 needs >=120 steps at N=40 and N=48, where the 1/h term
+    # alone would ask for only 50-60; below that its Cl 3π pair splits
+    # spuriously and the SCF stalls.
+    assert default_krylov_dim(40, 4) >= 120
+    assert default_krylov_dim(48, 4) >= 120
+    assert default_krylov_dim(8, 12) > 12

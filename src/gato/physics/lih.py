@@ -116,7 +116,7 @@ def solve_rhf_at_geometry(
     tol: float = 1e-6,
     mixing: float = 0.5,
     order: int = 4,
-    lanczos_iters: int = 60,
+    lanczos_iters: int | None = None,
     initial_orbitals: jax.Array | None = None,
 ) -> LiHPoint:
     """RHF on a fixed nuclear configuration with HGH pseudopotentials."""
