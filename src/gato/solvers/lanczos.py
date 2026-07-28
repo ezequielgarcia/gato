@@ -118,15 +118,22 @@ def lanczos(
         T = T + jnp.diag(off, k=1) + jnp.diag(off, k=-1)
     evals, evecs_T = jnp.linalg.eigh(T)
 
+    K = min(n_eigenstates, n_iters)
+
     # Reconstruct full-grid Ritz vectors from the Krylov basis. Use the
     # populated prefix V_buf[:n_iters]; V_buf[n_iters] is the next candidate
     # seed and not part of the Ritz expansion.
+    #
+    # Only the K lowest Ritz pairs are ever returned, so restrict the
+    # coefficient matrix to those columns *before* the matmul. Reconstructing
+    # all n_iters states first would allocate an (n_iters, N³) array and do
+    # n_iters/K times more work — at n_iters=80 that array is the peak memory
+    # of the whole solver and caps the affordable grid size.
     V_stack = V_buf[:n_iters].reshape(n_iters, -1)
-    psi_states = (evecs_T.T @ V_stack).reshape(n_iters, *shape)
+    psi_states = (evecs_T[:, :K].T @ V_stack).reshape(K, *shape)
 
-    K = min(n_eigenstates, n_iters)
     eigenvalues = evals[:K]
-    eigenstates = jnp.transpose(psi_states[:K], axes=(1, 2, 3, 0))
+    eigenstates = jnp.transpose(psi_states, axes=(1, 2, 3, 0))
 
     converged = bool(jnp.any(betas[: max(n_iters - 1, 1)] < tol))
 
